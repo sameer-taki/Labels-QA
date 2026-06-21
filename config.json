@@ -2,7 +2,18 @@
   "port": 3000,
   "host": "0.0.0.0",
   "orgName": "Golden Manufacturers Pte Ltd",
-  "sso": { "enabled": true, "allowedDomain": "golden.com.fj", "note": "Stub: replace verifySso() with Microsoft Entra ID token validation in production." },
+  "auth": {
+    "sessionTtlMinutes": 720,
+    "note": "Sessions expire after this many minutes of inactivity (sliding window) and persist to data/sessions.json across restarts."
+  },
+  "sso": {
+    "enabled": true,
+    "mode": "stub",
+    "allowedDomain": "golden.com.fj",
+    "tenantId": "",
+    "clientId": "",
+    "note": "mode 'stub' accepts any @allowedDomain email (demo). Set mode 'entra' plus tenantId/clientId and implement verifyEntraToken() in server.js for production Microsoft Entra ID validation."
+  },
   "businessCentral": {
     "enabled": false,
     "baseUrl": "http://bc-test.gml.com.fj:7048/BC140/ODataV4",

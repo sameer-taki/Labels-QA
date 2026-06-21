@@ -6,6 +6,9 @@
 # Uploaded defect photos and signatures (runtime artifacts).
 /data/uploads/
 
+# Persisted login sessions (runtime).
+/data/sessions.json
+
 # Node
 node_modules/
 npm-debug.log*

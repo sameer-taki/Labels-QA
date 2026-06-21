@@ -81,7 +81,7 @@ async function doSso(){
   try{ const r=await api("/api/login",{method:"POST",body:{mode:"sso",email}}); TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp(); }
   catch(e){ toast(e.message||"SSO not recognised"); }
 }
-function logout(){ TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; showLogin(); }
+function logout(){ try{ if(TOKEN) fetch("/api/logout",{method:"POST",headers:hdrs()}).catch(()=>{}); }catch(e){} TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; showLogin(); }
 function showApp(){
   $("#login").classList.add("hidden"); $("#appwrap").classList.remove("hidden");
   $("#whoName").textContent=ME.name; $("#whoRole").textContent=ME.role;
@@ -262,7 +262,10 @@ async function sigSave(){ const c=window._sigCanvas; if(!c)return; const dataUrl
 
 /* save */
 function saveBar(stage){ return `<div class="row-actions no-print" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn" onclick="saveStage('${stage}',false)">Save Draft</button><button class="btn gold" onclick="saveStage('${stage}',true)">Save &amp; Mark Complete</button><button class="btn ghost" onclick="go('entry',{jobNo:'${esc(JOB.jobNo)}'})">Back</button></div>`; }
-async function saveStage(stage,done){ let data={_done:done};
+async function saveStage(stage,done){
+  const sn=+stage.slice(-1);
+  if(done){ for(let k=1;k<sn;k++){ if(!(JOB["stage"+k]&&JOB["stage"+k]._done)){ toast("Complete Stage "+k+" first."); return; } } }
+  let data={_done:done};
   if(stage==="stage1"){ collectSt(); data.stations=window._st; ["date","productDescription","proceed","qaOfficer","operator","supervisor","materialType","thicknessGrammage","substrate","batchDetails","dyneLevel","supplier","unwinderTension","infeedTension","rewindTension","outfeedTension","machineSpeed","airPressure","chillerTemp","corona","textColorLayout","printScuffing","cofFilmMetal","cofFilmFilm","scotchTape","gs1Barcode","printRegistration","tackSetoff","comments"].forEach(k=>data[k]=val("s1_"+k)); }
   else if(stage==="stage2"){ collectRw(); data.rows=window._rows; ["date","machineName","shift","qaOfficer","operator","avtRef","remarks"].forEach(k=>data[k]=val("s2_"+k)); }
   else if(stage==="stage3"){ collectRl(); data.rolls=window._rolls; ["date","customerItem","operatorName","startTime","finishTime","thickness","colours","register","copy","barcode","webTension","curling","cuttingAccuracy","setupHours","dtMaterial","dtWindup","dtDamage","dtMechanical","dtElectrical","dtOthers","operatorRemarks","qcRemarks"].forEach(k=>data[k]=val("s3_"+k)); }
@@ -327,14 +330,49 @@ async function analyticsView(){
 
 /* admin */
 async function admin(){
-  const md=MD; const audit=await api("/api/audit");
-  app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, integrations and audit trail. Role: ${esc(ME.role)}</p>
+  const md=MD; const audit=await api("/api/audit"); const isAdmin=ME.role==="Administrator";
+  app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, users, integrations and audit trail. Role: ${esc(ME.role)}</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
+    <h3>Export data</h3><p class="sub" style="margin-top:-6px">Download records for management review or audit.</p><div class="row-actions"><button class="btn ghost sm" onclick="downloadCsv('/api/export/jobs','golden-qa-jobs.csv')">⤓ Jobs (CSV)</button><button class="btn ghost sm" onclick="downloadCsv('/api/export/defects','golden-qa-defects.csv')">⤓ Defects &amp; waste (CSV)</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
-    <h3>Users</h3><div style="overflow-x:auto"><table><thead><tr><th>User</th><th>Role</th></tr></thead><tbody>${md.users?'':''}</tbody></table></div>
+    ${isAdmin?`<h3>Users</h3><div class="row-actions"><button class="btn gold sm" onclick="userForm()">+ Add user</button></div><div id="usersPanel"><div class="empty">Loading…</div></div>`:``}
     <h3>Audit trail (latest 300)</h3><div style="overflow-x:auto;max-height:320px;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join("")}</tbody></table></div></div>`;
+  if(isAdmin) renderUsers();
 }
+/* ---- user management (Administrator) ---- */
+const ROLE_OPTS=["QA Officer","Supervisor","Quality Manager","Administrator"];
+let ADMIN_USERS=[];
+async function renderUsers(){ const host=$("#usersPanel"); if(!host)return;
+  try{ ADMIN_USERS=await api("/api/admin/users"); }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  host.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>ID</th><th>Role</th><th>Sign-in</th><th>Status</th><th></th></tr></thead><tbody>${ADMIN_USERS.map(u=>`<tr>
+    <td><b>${esc(u.name)}</b></td><td>${esc(u.id)}</td><td>${esc(u.role)}</td>
+    <td>${u.sso?'Microsoft 365':(u.hasPin?'PIN':'—')}</td>
+    <td>${u.active?'<span class="pill green">Active</span>':'<span class="pill grey">Disabled</span>'}</td>
+    <td style="white-space:nowrap"><button class="btn ghost sm" onclick="userForm('${esc(u.id)}')">Edit</button> <button class="btn ghost sm" onclick="userToggle('${esc(u.id)}',${u.active?'false':'true'})">${u.active?'Disable':'Enable'}</button> <button class="btn danger sm" onclick="userDelete('${esc(u.id)}')">Delete</button></td>
+  </tr>`).join("")}</tbody></table></div>`;
+}
+function userForm(id){ const u=id?ADMIN_USERS.find(x=>x.id===id):null; window._editUser=!!u; const d=u||{id:"",name:"",role:"QA Officer"};
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
+    <div class="grid g2">
+      <div class="field"><label>Full name</label><input id="u_name" value="${esc(d.name)}"></div>
+      <div class="field"><label>User ID ${u?'':'<span class="req">*</span>'}</label><input id="u_id" value="${esc(d.id)}" ${u?'disabled':''} placeholder="e.g. jdoe"></div>
+      <div class="field"><label>Role</label><select id="u_role">${ROLE_OPTS.map(r=>`<option ${r===d.role?'selected':''}>${r}</option>`).join("")}</select></div>
+      <div class="field"><label>${u?'Reset PIN (blank = keep)':'PIN (4–8 digits)'}</label><input id="u_pin" inputmode="numeric" placeholder="${u?'••••':'e.g. 1234'}"></div>
+    </div>
+    <div class="row-actions"><button class="btn gold" onclick="userSave()">${u?'Save changes':'Create user'}</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function userSave(){ const edit=window._editUser; const id=val("u_id").trim(); const name=val("u_name").trim(), role=val("u_role"), pin=val("u_pin").trim();
+  try{ if(edit){ await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body:{name,role,pin:pin||undefined}}); }
+    else { if(!id){toast("User ID required");return;} if(!/^\d{4,8}$/.test(pin)){toast("PIN must be 4–8 digits");return;} await api("/api/admin/users",{method:"POST",body:{id,name,role,pin}}); }
+    closeModal(); toast("User saved"); renderUsers(); }
+  catch(e){ toast(e.message); }
+}
+async function userToggle(id,active){ try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body:{active:(active===true||active==="true")}}); toast("Updated"); renderUsers(); }catch(e){ toast(e.message); } }
+async function userDelete(id){ if(!confirm("Delete user "+id+"? This cannot be undone."))return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User deleted"); renderUsers(); }catch(e){ toast(e.message); } }
+async function downloadCsv(path,filename){ try{ const r=await fetch(path,{headers:hdrs()}); if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||("HTTP "+r.status)); }
+  const blob=await r.blob(); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast("Downloaded "+filename); }
+  catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
 async function bcTest(){ const no=$("#bcNo").value.trim(); const out=$("#bcOut"); out.textContent="Looking up…"; try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); out.textContent=JSON.stringify(r,null,2); }catch(e){ out.textContent=e.message; } }

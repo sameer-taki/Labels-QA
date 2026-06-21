@@ -58,7 +58,8 @@ Linux: `systemd` or `pm2`). See section 7.
 | Key | What it does |
 |-----|--------------|
 | `port` / `host` | Server address (default 3000 on all interfaces) |
-| `sso` | Microsoft 365 sign-in. Stub accepts any `@golden.com.fj`; replace `verifySso()` in `server.js` with real Entra ID token validation for production |
+| `auth` | `sessionTtlMinutes` — sliding inactivity timeout for sign-ins (default 720 = 12h). Sessions persist to `data/sessions.json` so a restart doesn't log everyone out |
+| `sso` | Microsoft 365 sign-in. `mode:"stub"` accepts any `@golden.com.fj` email (demo). For production set `mode:"entra"` + `tenantId`/`clientId` and implement `verifyEntraToken()` in `server.js` |
 | `businessCentral` | Set `enabled:true` and confirm `jobService` (the published OData web service holding the print Job# + item). The server queries `bc-test.gml.com.fj` directly — run it on a host that can reach BC |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
 | `tolerances` | COF range, registration max, barcode min grade — drive the auto pass/fail flags (also editable in Admin) |
@@ -90,10 +91,12 @@ Linux: `systemd` or `pm2`). See section 7.
 
 ## 7. Production hardening checklist
 
-- [ ] Change all default PINs (Admin > Users / edit `seedDB`), set strong manager PINs.
+- [ ] Change all default PINs in **Admin > Users** (add/edit users, reset PINs, set roles,
+      disable leavers — Administrator role required), and set strong manager PINs.
 - [ ] Put the server behind **HTTPS** (reverse proxy: IIS/ARR, nginx, or Caddy) so the camera
       and PWA install work reliably and credentials are encrypted.
-- [ ] Replace the SSO stub with real **Microsoft Entra ID** validation.
+- [ ] Replace the SSO stub with real **Microsoft Entra ID** validation — set `sso.mode="entra"`
+      and implement `verifyEntraToken()` in `server.js` (a documented scaffold is in place).
 - [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart.
 - [ ] Move to **PostgreSQL** and schedule **backups** of the database + `uploads/`.
 - [ ] Confirm the **Business Central** web service and enable it.
@@ -104,11 +107,13 @@ Linux: `systemd` or `pm2`). See section 7.
 ## 8. What's included (feature list)
 
 Tablet-first PWA (installable, offline + sync) · PIN + Microsoft 365 sign-in · role-based access ·
-machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
+persistent sessions with inactivity expiry · **user management** (add/edit/disable, reset PIN,
+roles — Administrator only) · machine-driven Stage-1 forms · all 4 stages with real form fields ·
+**in-sequence stage completion with required-field validation** · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
-reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
-Pareto, waste, downtime, first-pass yield) · Business Central + AVT import · hold/reject alerts ·
-immutable audit trail · admin master-data editor.
+reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · **CSV export of jobs &
+defects/waste** · dashboards (defect Pareto, waste, downtime, first-pass yield) · Business Central +
+AVT import · hold/reject alerts · immutable audit trail · admin master-data editor.
 
 ---
 

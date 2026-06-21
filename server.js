@@ -10,6 +10,7 @@ const CFG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const UP_DIR = path.join(DATA_DIR, 'uploads');
+const SESS_FILE = path.join(DATA_DIR, 'sessions.json');
 const PUB = path.join(ROOT, 'public');
 fs.mkdirSync(UP_DIR, { recursive: true });
 
@@ -26,7 +27,7 @@ function loadDB() {
 let saveTimer = null;
 function saveDB() { fs.writeFileSync(DB_FILE, JSON.stringify(DB, null, 2)); }
 function hashPin(pin, salt) { return crypto.createHash('sha256').update(salt + ':' + pin).digest('hex'); }
-function mkUser(id, name, role, pin) { const salt = crypto.randomBytes(6).toString('hex'); return { id, name, role, salt, pinHash: hashPin(pin, salt) }; }
+function mkUser(id, name, role, pin) { const salt = crypto.randomBytes(6).toString('hex'); return { id, name, role, active: true, salt, pinHash: hashPin(pin, salt) }; }
 
 function seedDB() {
   return {
@@ -71,12 +72,39 @@ function seedJobs() {
 }
 
 /* ---------- helpers ---------- */
-const SESS = {}; // token -> {userId, ts}
+/* Sessions: token -> {userId, ts}. Persisted to disk so a server restart does not
+   log everyone out, and expired after a sliding inactivity window (config.auth). */
+const SESS_TTL = (((CFG.auth&&CFG.auth.sessionTtlMinutes)||720) * 60000);
+let SESS = {};
+function loadSess(){ try{ if(fs.existsSync(SESS_FILE)) SESS = JSON.parse(fs.readFileSync(SESS_FILE,'utf8'))||{}; }catch(e){ SESS={}; } pruneSess(); }
+function saveSess(){ try{ fs.writeFileSync(SESS_FILE, JSON.stringify(SESS)); }catch(e){} }
+function pruneSess(){ const now=Date.now(); let changed=false; for(const t in SESS){ if(now-(SESS[t].ts||0) > SESS_TTL){ delete SESS[t]; changed=true; } } if(changed) saveSess(); }
 function newToken() { return crypto.randomBytes(16).toString('hex'); }
-function userByToken(req) { const t = (req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const s = t && SESS[t]; return s ? DB.users.find(u=>u.id===s.userId) : null; }
+function userByToken(req) {
+  const t = (req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token'];
+  const s = t && SESS[t]; if(!s) return null;
+  if(Date.now()-(s.ts||0) > SESS_TTL){ delete SESS[t]; saveSess(); return null; } // expired
+  s.ts = Date.now(); // sliding window (persisted on login/logout/prune, not every request)
+  const u = DB.users.find(x=>x.id===s.userId);
+  if(!u || u.active===false){ delete SESS[t]; saveSess(); return null; } // user removed/disabled
+  return u;
+}
+function isRole(user, roles){ return !!user && roles.includes(user.role); }
 function audit(user, action, jobNo, detail) { DB.audit.push({ ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:jobNo||'', detail:detail||'' }); if (DB.audit.length>5000) DB.audit = DB.audit.slice(-5000); }
 function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
 function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<4?'In Progress':'Released'); }
+function mlabelS(m){ const mm=DB.masterdata&&DB.masterdata.machines&&DB.masterdata.machines[m]; return mm?mm.label:(m||''); }
+/* Stage validation: enforce in-sequence completion + minimum required fields. */
+function stageSequenceError(j, n){ for(let k=1;k<n;k++){ if(!(j['stage'+k]&&j['stage'+k]._done)) return 'Complete Stage '+k+' before completing Stage '+n+'.'; } return null; }
+function stageRequiredError(n, d){
+  const blank=v=>(v===undefined||v===null||String(v).trim()===''); const miss=[];
+  const req=pairs=>pairs.forEach(p=>{ if(blank(d[p[1]])) miss.push(p[0]); });
+  if(n===1){ req([['Date','date'],['Proceed With Job','proceed'],['QA Officer','qaOfficer']]); }
+  else if(n===2){ req([['Date','date'],['QA Officer','qaOfficer']]); if(!(d.rows||[]).some(r=>r&&(String(r.totalMeters||'').trim()||String(r.defect||'').trim()))) miss.push('at least one reel/defect row'); }
+  else if(n===3){ req([['Date','date'],['Operator','operatorName']]); if(!(d.rolls||[]).some(r=>r&&String(r.no||'').trim())) miss.push('at least one roll'); }
+  else if(n===4){ req([['Date','date'],['Final Release Decision','statusFinal'],['QC Name','qcName']]); if(!(d.checks||[]).some(c=>c&&String(c.time||'').trim())) miss.push('at least one hourly check'); }
+  return miss.length ? ('Missing required: '+miss.join(', ')) : null;
+}
 
 function send(res, code, obj, headers) {
   const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
@@ -103,17 +131,24 @@ async function api(req, res, url) {
 
   if (seg[0]==='login' && method==='POST') {
     const b = await readBody(req);
-    if (b.mode==='sso') { const u = verifySso(b.email); if(!u) return send(res,401,{error:'SSO not recognised'}); const t=newToken(); SESS[t]={userId:u.id,ts:Date.now()}; audit(u,'login-sso'); return send(res,200,{ token:t, user:pubUser(u) }); }
+    if (b.mode==='sso') {
+      const u = await verifySso(b); if(!u) return send(res,401,{error:'SSO not recognised'});
+      if(u.active===false) return send(res,403,{error:'Account disabled'});
+      const t=newToken(); SESS[t]={userId:u.id,ts:Date.now()}; saveSess(); audit(u,'login-sso'); return send(res,200,{ token:t, user:pubUser(u) });
+    }
     const u = DB.users.find(x=>x.id===b.userId);
-    if (!u || u.pinHash !== hashPin(String(b.pin||''), u.salt)) return send(res,401,{error:'Invalid user or PIN'});
-    const t=newToken(); SESS[t]={userId:u.id,ts:Date.now()}; audit(u,'login'); return send(res,200,{ token:t, user:pubUser(u) });
+    if (!u || !u.pinHash || u.pinHash !== hashPin(String(b.pin||''), u.salt)) return send(res,401,{error:'Invalid user or PIN'});
+    if (u.active===false) return send(res,403,{error:'Account disabled'});
+    const t=newToken(); SESS[t]={userId:u.id,ts:Date.now()}; saveSess(); audit(u,'login'); return send(res,200,{ token:t, user:pubUser(u) });
   }
-  if (seg[0]==='users' && method==='GET') return send(res,200, DB.users.map(pubUser)); // for login picker
+  if (seg[0]==='users' && method==='GET') return send(res,200, DB.users.filter(u=>u.active!==false && u.pinHash).map(pubUser)); // PIN login picker (active, PIN-enabled)
 
   const user = userByToken(req);
   if (!user) return send(res,401,{error:'Not authenticated'});
 
   if (seg[0]==='me') return send(res,200,{ user:pubUser(user) });
+
+  if (seg[0]==='logout' && method==='POST') { const t=(req.headers['authorization']||'').replace(/^Bearer /,'')||req.headers['x-token']; if(t&&SESS[t]){ delete SESS[t]; saveSess(); } audit(user,'logout'); return send(res,200,{ ok:true }); }
 
   if (seg[0]==='jobs' && method==='GET' && !seg[1]) {
     return send(res,200, DB.jobs.map(j=>({ jobNo:j.jobNo, product:j.product, customer:j.customer, machine:j.machine, created:j.created, status:jobStatus(j), completed:completedStages(j) })));
@@ -132,10 +167,14 @@ async function api(req, res, url) {
   if (seg[0]==='jobs' && seg[2]==='stage' && method==='PUT') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
-    const n = seg[3]; const b = await readBody(req);
-    j['stage'+n] = b.data || {};
-    if(n==='4' && b.data && b.data._done && b.data.statusFinal){ j.statusOverride = b.data.statusFinal==='Released'?'Released':'Hold'; if(j.statusOverride!=='Released'){ NOTIFY.alert(CFG,'Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+b.data.statusFinal+' (qty '+(b.data.rejectedQty||'?')+')'); } }
-    audit(user,'save-stage'+n,j.jobNo, b.data&&b.data._done?'completed':'draft'); saveDB(); return send(res,200,j);
+    const n = seg[3]; const b = await readBody(req); const data = b.data || {};
+    if(data._done){ // drafts can always be saved; completion is validated
+      const seqErr = stageSequenceError(j, +n); if(seqErr) return send(res,400,{error:seqErr});
+      const reqErr = stageRequiredError(+n, data); if(reqErr) return send(res,400,{error:reqErr});
+    }
+    j['stage'+n] = data;
+    if(n==='4' && data._done && data.statusFinal){ j.statusOverride = data.statusFinal==='Released'?'Released':(data.statusFinal==='Rejected'?'Rejected':'Hold'); if(j.statusOverride!=='Released'){ NOTIFY.alert(CFG,'Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+data.statusFinal+' (qty '+(data.rejectedQty||'?')+')'); } }
+    audit(user,'save-stage'+n,j.jobNo, data._done?'completed':'draft'); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[2]==='hold' && method==='POST') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
@@ -154,6 +193,43 @@ async function api(req, res, url) {
   if (seg[0]==='masterdata' && method==='GET') return send(res,200, DB.masterdata);
   if (seg[0]==='masterdata' && method==='PUT') { const b=await readBody(req); DB.masterdata=Object.assign(DB.masterdata,b); audit(user,'update-masterdata'); saveDB(); return send(res,200,DB.masterdata); }
 
+  /* ---- user management (Administrator only) ---- */
+  if (seg[0]==='admin' && seg[1]==='users') {
+    if(!isRole(user,['Administrator'])) return send(res,403,{error:'Administrator access required'});
+    const ROLES=['QA Officer','Supervisor','Quality Manager','Administrator'];
+    const activeAdmins=()=>DB.users.filter(x=>x.role==='Administrator'&&x.active!==false).length;
+    if(method==='GET' && !seg[2]) return send(res,200, DB.users.map(adminUser));
+    if(method==='POST' && !seg[2]) { const b=await readBody(req);
+      const id=String(b.id||'').trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
+      if(!id || !String(b.name||'').trim() || !b.role) return send(res,400,{error:'id, name and role are required'});
+      if(!ROLES.includes(b.role)) return send(res,400,{error:'Invalid role'});
+      if(!/^\d{4,8}$/.test(String(b.pin||''))) return send(res,400,{error:'PIN must be 4–8 digits'});
+      if(DB.users.find(u=>u.id===id)) return send(res,409,{error:'User id already exists'});
+      const u=mkUser(id, String(b.name).trim(), b.role, String(b.pin)); DB.users.push(u);
+      audit(user,'create-user',null,id+' ('+b.role+')'); saveDB(); return send(res,200, adminUser(u));
+    }
+    const id=decodeURIComponent(seg[2]||''); const u=DB.users.find(x=>x.id===id);
+    if(seg[2] && method==='PUT') { if(!u) return send(res,404,{error:'User not found'}); const b=await readBody(req);
+      if(b.name!==undefined && String(b.name).trim()) u.name=String(b.name).trim();
+      if(b.role!==undefined){ if(!ROLES.includes(b.role)) return send(res,400,{error:'Invalid role'});
+        if(u.role==='Administrator' && b.role!=='Administrator' && activeAdmins()<=1) return send(res,400,{error:'Cannot demote the last administrator'});
+        u.role=b.role; }
+      if(b.active!==undefined){ const a=!!b.active;
+        if(!a && u.id===user.id) return send(res,400,{error:'You cannot disable your own account'});
+        if(!a && u.role==='Administrator' && activeAdmins()<=1) return send(res,400,{error:'Cannot disable the last administrator'});
+        u.active=a; if(!a){ for(const t in SESS){ if(SESS[t].userId===u.id) delete SESS[t]; } saveSess(); } }
+      if(b.pin!==undefined && String(b.pin)!==''){ if(!/^\d{4,8}$/.test(String(b.pin))) return send(res,400,{error:'PIN must be 4–8 digits'}); u.salt=crypto.randomBytes(6).toString('hex'); u.pinHash=hashPin(String(b.pin),u.salt); }
+      audit(user,'update-user',null,id); saveDB(); return send(res,200, adminUser(u));
+    }
+    if(seg[2] && method==='DELETE') { if(!u) return send(res,404,{error:'User not found'});
+      if(u.id===user.id) return send(res,400,{error:'You cannot delete your own account'});
+      if(u.role==='Administrator' && activeAdmins()<=1) return send(res,400,{error:'Cannot delete the last administrator'});
+      DB.users=DB.users.filter(x=>x.id!==id); for(const t in SESS){ if(SESS[t].userId===id) delete SESS[t]; } saveSess();
+      audit(user,'delete-user',null,id); saveDB(); return send(res,200,{ ok:true });
+    }
+    return send(res,404,{error:'Unknown user route'});
+  }
+
   if (seg[0]==='audit' && method==='GET') return send(res,200, DB.audit.slice(-300).reverse());
 
   if (seg[0]==='bc' && seg[1]==='job' && method==='GET') { const r = await BC.lookupJob(CFG, decodeURIComponent(seg[2]||'')); return send(res, r.error?502:200, r); }
@@ -162,10 +238,51 @@ async function api(req, res, url) {
 
   if (seg[0]==='analytics' && method==='GET') return send(res,200, analytics());
 
+  if (seg[0]==='export' && method==='GET') {
+    const cell=v=>{ v=v==null?'':String(v); return /[",\n\r]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+    const toCsv=(headers,rows)=> [headers].concat(rows).map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
+    const csvRes=(name,csv)=> send(res,200,csv,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="'+name+'"'});
+    if(seg[1]==='jobs') return csvRes('golden-qa-jobs.csv', toCsv(['Job #','Product','Customer','Machine','Created','Status','Stages Complete'],
+      DB.jobs.map(j=>[j.jobNo,j.product,j.customer,mlabelS(j.machine),j.created,jobStatus(j),completedStages(j)])));
+    if(seg[1]==='defects'){ const rows=[]; DB.jobs.forEach(j=>{ ((j.stage2&&j.stage2.rows)||[]).forEach(r=>{ if(r&&(r.defect||r.weightKg||r.totalMeters)) rows.push([j.jobNo,mlabelS(j.machine),r.roll,r.defect,r.totalMeters,r.wasteIn,r.wasteOut,r.weightKg]); }); });
+      return csvRes('golden-qa-defects.csv', toCsv(['Job #','Machine','Roll','Defect','Total m','Waste In','Waste Out','Weight Kg'], rows)); }
+    return send(res,404,{error:'Unknown export'});
+  }
+
   return send(res,404,{error:'Unknown API route'});
 }
 function pubUser(u){ return { id:u.id, name:u.name, role:u.role }; }
-function verifySso(email){ if(!email) return null; const dom='@'+CFG.sso.allowedDomain; if(!String(email).toLowerCase().endsWith(dom)) return null; const id=String(email).split('@')[0].toLowerCase(); return DB.users.find(u=>u.id===id) || { id, name:email.split('@')[0], role:'Quality Manager' }; }
+function adminUser(u){ return { id:u.id, name:u.name, role:u.role, active:u.active!==false, sso:!!u.sso, hasPin:!!u.pinHash }; }
+
+/* SSO. mode 'stub' (default) trusts any email at the allowed domain — demo only.
+   mode 'entra' delegates to verifyEntraToken() (see scaffold below). */
+async function verifySso(b){
+  const mode=(CFG.sso&&CFG.sso.mode)||'stub';
+  if(mode==='entra'){ const p=await verifyEntraToken(b.idToken||b.accessToken); return p?ssoProfileToUser(p):null; }
+  const email=b&&b.email; if(!email) return null;
+  const dom='@'+CFG.sso.allowedDomain; if(!String(email).toLowerCase().endsWith(dom)) return null;
+  return ssoProfileToUser({ id:String(email).split('@')[0].toLowerCase(), name:email.split('@')[0], role:'Quality Manager', email });
+}
+/* Map a verified SSO profile to a local user, auto-provisioning on first sign-in
+   so subsequent token lookups (which resolve against DB.users) succeed. */
+function ssoProfileToUser(p){ if(!p||!p.id) return null;
+  let u=DB.users.find(x=>x.id===p.id);
+  if(!u){ u={ id:p.id, name:p.name||p.id, role:p.role||'QA Officer', active:true, sso:true }; DB.users.push(u); audit(null,'provision-sso-user',null,p.id); saveDB(); }
+  return u;
+}
+/* SCAFFOLD — Microsoft Entra ID token validation. To enable in production:
+     1) set sso.mode='entra' and fill sso.tenantId / sso.clientId in config.json;
+     2) validate the JWT signature against the tenant JWKS:
+        https://login.microsoftonline.com/<tenantId>/discovery/v2.0/keys
+     3) verify claims: iss == https://login.microsoftonline.com/<tenantId>/v2.0,
+        aud == clientId, exp in the future, tid == tenantId;
+     4) return { id, name, role, email } built from the verified claims.
+   Use a vetted JWT/JWKS library for step 2–3. Until implemented, this rejects all
+   logins so an enabled-but-unconfigured 'entra' mode never silently trusts a token. */
+async function verifyEntraToken(token){ if(!token) return null;
+  console.warn('SSO mode=entra but verifyEntraToken() is not implemented yet — rejecting login. See scaffold in server.js.');
+  return null;
+}
 
 function analytics(){
   const defects={}, wasteByMachine={}, downtime={Setup:0,Material:0,Windup:0,Damage:0,Mechanical:0,Electrical:0,Others:0};
@@ -183,6 +300,8 @@ function analytics(){
 
 /* ---------- HTTP server ---------- */
 loadDB();
+loadSess();
+setInterval(pruneSess, 3600000).unref(); // hourly expiry sweep
 const server = http.createServer((req,res)=>{
   const url = new URL(req.url, 'http://x');
   if (url.pathname.startsWith('/api/')) return api(req,res,url).catch(e=>{ console.error(e); send(res,500,{error:String(e)}); });
