@@ -72,20 +72,18 @@ async function boot(){
 }
 async function showLogin(){
   $("#login").classList.remove("hidden"); $("#appwrap").classList.add("hidden");
-  let users=[]; try{ users=await (await fetch("/api/users")).json(); }catch(e){}
-  $("#loginUser").innerHTML = users.map(u=>`<option value="${u.id}">${esc(u.name)} - ${esc(u.role)}</option>`).join("");
-  let pin="";
-  const dots=()=>{ $("#pindots").textContent = "····".split("").map((c,i)=>i<pin.length?"•":"·").join(""); };
-  const pad=$("#pinpad"); pad.innerHTML=["1","2","3","4","5","6","7","8","9","⌫","0","✓"].map(k=>`<button data-k="${k}">${k}</button>`).join("");
-  pad.onclick=(e)=>{ const b=e.target.closest("button"); if(!b)return; const k=b.dataset.k; if(k==="⌫"){pin=pin.slice(0,-1);} else if(k==="✓"){doPin(pin);} else if(pin.length<4){pin+=k;} dots(); };
-  dots();
-  $("#pinLogin").onclick=()=>doPin(pin);
+  const u=$("#loginUser"), p=$("#loginPass");
+  if(u) u.value=""; if(p) p.value="";
+  $("#pwLogin").onclick=doLogin;
   $("#ssoLogin").onclick=doSso;
-  window._getPin=()=>pin;
+  if(u) u.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); if(p) p.focus(); } };
+  if(p) p.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLogin(); } };
+  if(u) u.focus();
 }
-async function doPin(pin){
-  const userId=$("#loginUser").value;
-  try{ const r=await api("/api/login",{method:"POST",body:{userId,pin}}); TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp(); }
+async function doLogin(){
+  const username=$("#loginUser").value.trim(), password=$("#loginPass").value;
+  if(!username||!password){ toast("Enter your username and password"); return; }
+  try{ const r=await api("/api/login",{method:"POST",body:{username,password}}); TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp(); }
   catch(e){ toast(e.message||"Login failed"); }
 }
 async function doSso(){
@@ -402,7 +400,7 @@ async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"
 async function admin(){
   const md=MD; let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
   const canManage=["Quality Manager","Administrator"].includes(ME.role);
-  let users=[]; try{ users = canManage ? await api("/api/admin/users") : await (await fetch("/api/users")).json(); }catch(e){ users=[]; }
+  let users=[]; try{ users = await api("/api/admin/users"); }catch(e){ users=[]; }
   window._users=users;
   const userRows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
   app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, users, integrations and audit trail. Role: ${esc(ME.role)}</p>
@@ -419,14 +417,14 @@ function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
     <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
-    <div class="field"><label>PIN — 4 digits${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pin" inputmode="numeric" maxlength="4" placeholder="${u?'••••':'4 digits'}"></div>
+    <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>
     <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
-async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), pin=val("u_pin").trim();
+async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass");
   if(!name){ toast("Name is required"); return; }
   try{
-    if(id){ const body={name,role}; if(pin){ if(!/^\d{4}$/.test(pin)){ toast("PIN must be 4 digits"); return; } body.pin=pin; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
-    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(!/^\d{4}$/.test(pin)){ toast("PIN must be 4 digits"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,pin}}); }
+    if(id){ const body={name,role}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
+    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password}}); }
     closeModal(); toast("User saved"); admin();
   }catch(e){ toast(e.message); }
 }

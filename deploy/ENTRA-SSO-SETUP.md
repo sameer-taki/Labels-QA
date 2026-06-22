@@ -1,7 +1,7 @@
 # Microsoft Entra ID (Azure AD) SSO — Setup Guide
 
 This guide wires the Golden QA App to **Microsoft Entra ID** so staff sign in with
-their `@golden.com.fj` Microsoft 365 account instead of a PIN.
+their `@golden.com.fj` Microsoft 365 account instead of a username & password.
 
 How it works end-to-end:
 
@@ -16,7 +16,7 @@ How it works end-to-end:
    - validates `exp` / `nbf` (±120 s skew), `aud` (= your **Client ID**),
      `iss` (= `https://login.microsoftonline.com/<tenantId>/v2.0`), and `tid`,
    - extracts the e-mail / UPN and enforces the `@golden.com.fj` domain.
-4. On success the server issues its own session token, exactly like PIN login.
+4. On success the server issues its own session token, exactly like password login.
 
 No npm packages are used — verification is done with Node's built-in `crypto`
 and `https` modules only.
@@ -124,7 +124,7 @@ The browser side is handled separately; for reference, the SPA must:
    });
    ```
 
-The server returns `{ token, user }` exactly as for PIN login; store `token` and
+The server returns `{ token, user }` exactly as for password login; store `token` and
 send it as `x-token` (or `Authorization: Bearer`) on subsequent API calls.
 
 ---

@@ -94,8 +94,8 @@ Expected: `{ "ok": true, "org": "...", "time": "..." }`.
 Then open `http://<server-ip>:3000` from a tablet on the same network (README §1–2).
 Press `Ctrl+C` to stop; the next sections make it run as a managed service.
 
-> **Change the default PINs before go-live** (README §7). The seeded logins are
-> admin/0000, ateet/9999, rprasad/2345, akumar/1234, pdevi/1234.
+> **Change the default passwords before go-live** (README §7). The seeded logins are
+> admin/admin123, ateet/ateet123, rprasad/prasad123, akumar/kumar123, pdevi/devi123.
 
 ---
 
@@ -367,7 +367,7 @@ Teams/email alerts when configured (README §4–5).
 
 Confirm before handing to production — see the full list in **README §7**:
 
-- [ ] Default PINs changed (Admin > Users).
+- [ ] Default passwords changed (Admin > Users).
 - [ ] HTTPS reverse proxy in place (§7); app bound to localhost; only 443 exposed.
 - [ ] Service installed with auto-restart (§5/§6) and survives a reboot.
 - [ ] Firewall rule applied (§4).

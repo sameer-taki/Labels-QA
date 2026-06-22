@@ -26,13 +26,16 @@ Linux: `systemd` or `pm2`). See section 7.
 
 > **Full step-by-step install, HTTPS, service, backup and upgrade instructions are in [DEPLOYMENT.md](DEPLOYMENT.md) and the [`deploy/`](deploy) folder.** Run `npm test` for a quick smoke test of the API.
 
-### Default sign-ins (change before go-live)
-| User | Role | PIN |
-|------|------|-----|
-| A. Kumar / P. Devi | QA Officer | 1234 |
-| R. Prasad | Supervisor | 2345 |
-| Ateet Roshan | Quality Manager | 9999 |
-| Administrator | Administrator | 0000 |
+### Default sign-ins (username / password — change before go-live)
+| Username | Name | Role | Password |
+|----------|------|------|----------|
+| `admin` | Administrator | Administrator | `admin123` |
+| `ateet` | Ateet Roshan | Quality Manager | `ateet123` |
+| `rprasad` | R. Prasad | Supervisor | `prasad123` |
+| `akumar` | A. Kumar | QA Officer | `kumar123` |
+| `pdevi` | P. Devi | QA Officer | `devi123` |
+
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**, or sign in with **Microsoft 365** (Entra ID) instead.
 
 ---
 
@@ -95,7 +98,7 @@ Linux: `systemd` or `pm2`). See section 7.
 
 ## 7. Production hardening checklist
 
-- [ ] Change all default PINs (Admin > Users / edit `seedDB`), set strong manager PINs.
+- [ ] Change all default **passwords** (Admin > Users / edit `seedDB`), set strong manager passwords.
 - [ ] Put the server behind **HTTPS** (reverse proxy: IIS/ARR, nginx, or Caddy) so the camera
       and PWA install work reliably and credentials are encrypted.
 - [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
@@ -108,12 +111,12 @@ Linux: `systemd` or `pm2`). See section 7.
 
 ## 8. What's included (feature list)
 
-Tablet-first PWA (installable, offline + sync) · PIN + Microsoft 365 sign-in · role-based access ·
+Tablet-first PWA (installable, offline + sync) · username/password + Microsoft 365 sign-in · role-based access ·
 machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
 Pareto, waste, downtime, first-pass yield) · Business Central + AVT import · hold/reject alerts ·
-immutable audit trail · admin master-data editor · **user management** (add/edit, PIN reset) ·
+immutable audit trail · admin master-data editor · **user management** (add/edit, password reset) ·
 **stage-in-sequence enforcement** · **required-field validation** · **dashboard search/filter** ·
 **CSV export** · **manager e-mail/Teams digest** · **automatic rotating backups** · optional
 **SQLite** storage · real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem

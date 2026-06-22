@@ -114,23 +114,22 @@ async function main() {
     eq('health returns 200', r.status, 200);
     ok('health ok:true and org present', !!(r.body && r.body.ok && r.body.org), JSON.stringify(r.body));
 
-    // 2. users list (unauth) includes admin
-    r = await request('GET', '/api/users');
-    eq('GET /api/users returns 200', r.status, 200);
-    ok('GET /api/users returns array', Array.isArray(r.body), typeof r.body);
-    ok("GET /api/users includes 'admin'",
+    // 2. login admin / admin123
+    r = await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
+    eq('login admin/admin123 returns 200', r.status, 200);
+    const adminToken = r.body && r.body.token;
+    ok('login admin returns token', !!adminToken, JSON.stringify(r.body));
+
+    // 3. login wrong password -> 401
+    r = await request('POST', '/api/login', { username: 'admin', password: 'wrongpass' });
+    eq('login admin with wrong password -> 401', r.status, 401);
+
+    // 4. admin user list (manager) includes admin
+    r = await request('GET', '/api/admin/users', undefined, adminToken);
+    eq('GET /api/admin/users returns 200', r.status, 200);
+    ok("GET /api/admin/users includes 'admin'",
       Array.isArray(r.body) && r.body.some((u) => u && u.id === 'admin'),
       JSON.stringify(r.body));
-
-    // 3. login admin / 0000
-    r = await request('POST', '/api/login', { userId: 'admin', pin: '0000' });
-    eq('login admin/0000 returns 200', r.status, 200);
-    const adminToken = r.body && r.body.token;
-    ok('login admin/0000 returns token', !!adminToken, JSON.stringify(r.body));
-
-    // 4. login wrong pin -> 401
-    r = await request('POST', '/api/login', { userId: 'admin', pin: '9999' });
-    eq('login admin with wrong pin -> 401', r.status, 401);
 
     // 5. /api/me with token
     r = await request('GET', '/api/me', undefined, adminToken);
@@ -192,13 +191,13 @@ async function main() {
     // 12. admin user lifecycle
     const NEWUSER = 'smoke' + PID;
     r = await request('POST', '/api/admin/users',
-      { id: NEWUSER, name: 'Smoke Test User', role: 'QA Officer', pin: '4321' },
+      { id: NEWUSER, name: 'Smoke Test User', role: 'QA Officer', password: 'secret123' },
       adminToken);
     eq('admin create user -> 200', r.status, 200);
 
     // duplicate create -> 409
     r = await request('POST', '/api/admin/users',
-      { id: NEWUSER, name: 'Smoke Test User', role: 'QA Officer', pin: '4321' },
+      { id: NEWUSER, name: 'Smoke Test User', role: 'QA Officer', password: 'secret123' },
       adminToken);
     eq('admin create duplicate user -> 409', r.status, 409);
 
@@ -219,12 +218,12 @@ async function main() {
       'still present');
 
     // 13. non-manager cannot manage users -> 403
-    r = await request('POST', '/api/login', { userId: 'akumar', pin: '1234' });
-    eq('login akumar/1234 (QA Officer) -> 200', r.status, 200);
+    r = await request('POST', '/api/login', { username: 'akumar', password: 'kumar123' });
+    eq('login akumar (QA Officer) -> 200', r.status, 200);
     const officerToken = r.body && r.body.token;
     ok('akumar login returns token', !!officerToken, JSON.stringify(r.body));
     r = await request('POST', '/api/admin/users',
-      { id: 'nope' + PID, name: 'Nope', role: 'QA Officer', pin: '0000' },
+      { id: 'nope' + PID, name: 'Nope', role: 'QA Officer', password: 'secret123' },
       officerToken);
     eq('non-manager POST /api/admin/users -> 403', r.status, 403);
 

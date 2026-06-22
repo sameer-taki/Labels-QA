@@ -32,17 +32,18 @@ function loadDB() {
   else { DB = seedDB(); saveDB(); }
 }
 function saveDB() { if (USE_SQLITE) STORE.save(DB); else fs.writeFileSync(DB_FILE, JSON.stringify(DB, null, 2)); }
-function hashPin(pin, salt) { return crypto.createHash('sha256').update(salt + ':' + pin).digest('hex'); }
-function mkUser(id, name, role, pin) { const salt = crypto.randomBytes(6).toString('hex'); return { id, name, role, salt, pinHash: hashPin(pin, salt) }; }
+function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toString('hex'); }
+function checkPw(u, pw) { if (!u || !u.passHash) return false; const h = hashPw(pw, u.salt); return h.length === u.passHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(u.passHash)); }
+function mkUser(id, name, role, pw) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt) }; }
 
 function seedDB() {
   return {
     users: [
-      mkUser('akumar', 'A. Kumar', 'QA Officer', '1234'),
-      mkUser('pdevi', 'P. Devi', 'QA Officer', '1234'),
-      mkUser('rprasad', 'R. Prasad', 'Supervisor', '2345'),
-      mkUser('ateet', 'Ateet Roshan', 'Quality Manager', '9999'),
-      mkUser('admin', 'Administrator', 'Administrator', '0000')
+      mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123'),
+      mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123'),
+      mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123'),
+      mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123'),
+      mkUser('admin', 'Administrator', 'Administrator', 'admin123')
     ],
     masterdata: {
       machines: {
@@ -144,11 +145,10 @@ async function api(req, res, url) {
       }
       return send(res,401,{error:'No id_token supplied'});
     }
-    const u = DB.users.find(x=>x.id===b.userId);
-    if (!u || u.pinHash !== hashPin(String(b.pin||''), u.salt)) return send(res,401,{error:'Invalid user or PIN'});
+    const u = DB.users.find(x=>x.id===String(b.username||'').trim().toLowerCase());
+    if (!u || !checkPw(u, String(b.password||''))) return send(res,401,{error:'Invalid username or password'});
     const t=newToken(); SESS[t]={userId:u.id,ts:Date.now(),user:pubUser(u)}; audit(u,'login'); return send(res,200,{ token:t, user:pubUser(u) });
   }
-  if (seg[0]==='users' && method==='GET') return send(res,200, DB.users.map(pubUser)); // for login picker
   if (seg[0]==='config' && method==='GET') return send(res,200,{ orgName:CFG.orgName, sso:{ enabled:!!(CFG.sso&&CFG.sso.enabled), clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' } });
 
   const user = userByToken(req);
@@ -202,23 +202,23 @@ async function api(req, res, url) {
   if (seg[0]==='masterdata' && method==='PUT') { if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can change master data'}); const b=await readBody(req); DB.masterdata=Object.assign(DB.masterdata,b); audit(user,'update-masterdata'); saveDB(); return send(res,200,DB.masterdata); }
 
   if (seg[0]==='admin' && seg[1]==='users') {
-    if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can manage users'});
     const uid = seg[2] ? decodeURIComponent(seg[2]).toLowerCase() : null;
-    if(method==='GET') return send(res,200, DB.users.map(pubUser));
+    if(method==='GET'){ if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, DB.users.map(pubUser)); }
+    if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can manage users'});
     if(method==='POST'){
       const b=await readBody(req);
       const id=String(b.id||'').trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
       if(!id||!String(b.name||'').trim()||!String(b.role||'').trim()) return send(res,400,{error:'User id, name and role are required'});
-      if(!/^\d{4}$/.test(String(b.pin||''))) return send(res,400,{error:'PIN must be exactly 4 digits'});
+      if(String(b.password||'').length<6) return send(res,400,{error:'Password must be at least 6 characters'});
       if(DB.users.find(u=>u.id===id)) return send(res,409,{error:'A user with that id already exists'});
-      DB.users.push(mkUser(id, String(b.name).trim(), String(b.role).trim(), String(b.pin))); audit(user,'create-user','',id); saveDB();
+      DB.users.push(mkUser(id, String(b.name).trim(), String(b.role).trim(), String(b.password))); audit(user,'create-user','',id); saveDB();
       return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
     if(uid && method==='PUT'){
       const b=await readBody(req); const u=DB.users.find(x=>x.id===uid); if(!u) return send(res,404,{error:'User not found'});
       if(String(b.name||'').trim()) u.name=String(b.name).trim();
       if(String(b.role||'').trim()) u.role=String(b.role).trim();
-      if(b.pin!==undefined && b.pin!==''){ if(!/^\d{4}$/.test(String(b.pin))) return send(res,400,{error:'PIN must be exactly 4 digits'}); u.salt=crypto.randomBytes(6).toString('hex'); u.pinHash=hashPin(String(b.pin),u.salt); }
+      if(b.password){ if(String(b.password).length<6) return send(res,400,{error:'Password must be at least 6 characters'}); u.salt=crypto.randomBytes(16).toString('hex'); u.passHash=hashPw(String(b.password),u.salt); }
       audit(user,'update-user','',uid); saveDB(); return send(res,200,{ ok:true, users:DB.users.map(pubUser) });
     }
     if(uid && method==='DELETE'){
