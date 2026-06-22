@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Runtime data (system of record — back up separately, do not commit)
+data/db.json
+data/uploads/
+
+# Environment / secrets
+.env
+.env.*
+config.local.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# Labels-QA
-=======
 # Golden QA — Starkist Label In-Process Inspection System
 
 A tablet-first quality-inspection app for the Starkist paper-label line. Operators and QA
@@ -116,4 +113,3 @@ immutable audit trail · admin master-data editor.
 ---
 
 *Golden Manufacturers Pte Ltd — built with Ateet Roshan (Quality Manager) & Sameer Mohammed Taki (AI Engineer).*
->>>>>>> f1c0c0c (Add project files)
