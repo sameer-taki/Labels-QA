@@ -52,7 +52,7 @@ async function api(path, opts={}){
   const method=opts.method||"GET";
   try{
     const r=await fetch(path,{method,headers:hdrs(),body:opts.body?JSON.stringify(opts.body):undefined});
-    if(r.status===401){ logout(); throw new Error("Session expired"); }
+    if(r.status===401 && !path.startsWith("/api/login")){ logout(); throw new Error("Session expired"); }
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
     if(method==="GET" && path.startsWith("/api/jobs")) localStorage.setItem("gqa_cache_"+path, JSON.stringify(j));
