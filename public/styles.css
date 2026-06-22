@@ -88,4 +88,18 @@ td input,td select{min-height:46px;padding:9px;font-size:15px}
 canvas.sig{border:2px dashed var(--line);border-radius:12px;width:100%;height:170px;touch-action:none;background:#fff}
 .thumbs{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}.thumbs img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
 .countdown{font-weight:800}
-@media print{header.app,nav.tabs,.row-actions,.no-print{display:none!important}main{max-width:100%}.card{box-shadow:none;border:none}}
+@media print{
+  body{background:#fff;font-size:12px}
+  header.app,nav.tabs,.row-actions,.no-print,.toast,#login{display:none!important}
+  main{max-width:100%;padding:0;margin:0}
+  .card{box-shadow:none;border:none;padding:0;margin:0}
+  .summary-stage{border:1px solid #999;break-inside:avoid;page-break-inside:avoid;margin-bottom:10px}
+  .summary-stage .head,th,.pill{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .summary-stage .head{background:#eee!important}
+  th{background:#eee!important}
+  table{font-size:11px}
+  .pill{border:1px solid #999}
+  h2,h3,h4{break-after:avoid;page-break-after:avoid}
+  .thumbs img{max-width:120px}
+  @page{margin:14mm}
+}

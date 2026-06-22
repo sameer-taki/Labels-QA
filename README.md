@@ -24,6 +24,8 @@ Built to run on an **on-premise server** with **zero external dependencies** (No
 To keep it running after logoff, install it as a service (Windows: `nssm`, or Task Scheduler;
 Linux: `systemd` or `pm2`). See section 7.
 
+> **Full step-by-step install, HTTPS, service, backup and upgrade instructions are in [DEPLOYMENT.md](DEPLOYMENT.md) and the [`deploy/`](deploy) folder.** Run `npm test` for a quick smoke test of the API.
+
 ### Default sign-ins (change before go-live)
 | User | Role | PIN |
 |------|------|-----|
@@ -58,7 +60,10 @@ Linux: `systemd` or `pm2`). See section 7.
 | Key | What it does |
 |-----|--------------|
 | `port` / `host` | Server address (default 3000 on all interfaces) |
-| `sso` | Microsoft 365 sign-in. Stub accepts any `@golden.com.fj`; replace `verifySso()` in `server.js` with real Entra ID token validation for production |
+| `sso` | Microsoft 365 sign-in. Leave `tenantId`/`clientId` blank for the demo e-mail sign-in; fill both with your **Entra App registration** GUIDs to require real Microsoft Entra ID `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
+| `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
+| `storage` | `driver:"json"` (default, `data/db.json`) or `"sqlite"` (built-in `node:sqlite`, Node 22.5+; falls back to JSON if unavailable) |
+| `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
 | `businessCentral` | Set `enabled:true` and confirm `jobService` (the published OData web service holding the print Job# + item). The server queries `bc-test.gml.com.fj` directly — run it on a host that can reach BC |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
 | `tolerances` | COF range, registration max, barcode min grade — drive the auto pass/fail flags (also editable in Admin) |
@@ -93,9 +98,9 @@ Linux: `systemd` or `pm2`). See section 7.
 - [ ] Change all default PINs (Admin > Users / edit `seedDB`), set strong manager PINs.
 - [ ] Put the server behind **HTTPS** (reverse proxy: IIS/ARR, nginx, or Caddy) so the camera
       and PWA install work reliably and credentials are encrypted.
-- [ ] Replace the SSO stub with real **Microsoft Entra ID** validation.
-- [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart.
-- [ ] Move to **PostgreSQL** and schedule **backups** of the database + `uploads/`.
+- [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
+- [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart — see [DEPLOYMENT.md](DEPLOYMENT.md) and [`deploy/install-windows-service.ps1`](deploy/install-windows-service.ps1).
+- [x] **Automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Optional **SQLite** storage via `storage.driver` (Node 22.5+). Still back up `data/uploads/`; move to **PostgreSQL** for high concurrency.
 - [ ] Confirm the **Business Central** web service and enable it.
 - [ ] Set the **SQF document-retention** period and confirm with your auditor.
 
@@ -108,7 +113,11 @@ machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
 Pareto, waste, downtime, first-pass yield) · Business Central + AVT import · hold/reject alerts ·
-immutable audit trail · admin master-data editor.
+immutable audit trail · admin master-data editor · **user management** (add/edit, PIN reset) ·
+**stage-in-sequence enforcement** · **required-field validation** · **dashboard search/filter** ·
+**CSV export** · **manager e-mail/Teams digest** · **automatic rotating backups** · optional
+**SQLite** storage · real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
+**deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ---
 

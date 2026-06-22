@@ -3,6 +3,7 @@
 
 const QC_PARAMS = ["Banded Bundle Checked","Shrink-Wrapped Bundle Checked","Packing Label Checked","Finished Good Pallet Checked","Label Orientation in Bundle","Line Clearance Status","Curling","Printing Defects","Cutting Defects"];
 const YN = ["","Yes","No","N/A"];
+const ROLES = ["QA Officer","Supervisor","Quality Manager","Administrator"];
 const STAGES = [
   {key:"stage1",no:1,name:"Printing",form:"F-040-A / F-016-E / F-027-A"},
   {key:"stage2",no:2,name:"Reel Inspection",form:"F-021"},
@@ -19,6 +20,8 @@ let CHARTS = {};
 const $ = (s,r=document)=>r.querySelector(s);
 const app = ()=>$("#app");
 function esc(v){ return v==null?"":String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+/* JS-string-safe + HTML-attribute-safe: for values placed inside '...' within a double-quoted onclick=""  */
+function jsq(v){ return esc(String(v==null?"":v).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\r?\n/g,"\\n")); }
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2300); }
 function statusPill(s){ const m={"New":"grey","In Progress":"amber","Released":"green","Hold":"red","Rejected":"red"}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
 function mlabel(m){ return MD&&MD.machines&&MD.machines[m]?MD.machines[m].label:m; }
@@ -30,9 +33,19 @@ window.addEventListener("offline", setNet);
 function queueGet(){ try{ return JSON.parse(localStorage.getItem("gqa_queue")||"[]"); }catch(e){ return []; } }
 function queueSet(q){ localStorage.setItem("gqa_queue", JSON.stringify(q)); }
 async function flushQueue(){
-  let q=queueGet(); if(!q.length) return; const keep=[];
-  for(const item of q){ try{ const r=await fetch(item.path,{method:item.method,headers:hdrs(),body:JSON.stringify(item.body)}); if(!r.ok) keep.push(item); }catch(e){ keep.push(item); } }
-  queueSet(keep); if(q.length && !keep.length){ toast("Offline changes synced."); if(CUR.view) render(); }
+  let q=queueGet(); if(!q.length) return; const keep=[]; let synced=0, rejected=0;
+  for(const item of q){
+    try{
+      const r=await fetch(item.path,{method:item.method,headers:hdrs(),body:JSON.stringify(item.body)});
+      if(r.ok){ synced++; }
+      else if(r.status>=400 && r.status<500 && r.status!==401){ rejected++; const j=await r.json().catch(()=>({})); toast("A queued change was rejected: "+(j.error||("HTTP "+r.status))); } // client error won't succeed on retry — drop it
+      else { keep.push(item); } // 401 / 5xx / network — keep and retry later
+    }catch(e){ keep.push(item); }
+  }
+  queueSet(keep);
+  if(synced && !rejected && !keep.length) toast("Offline changes synced.");
+  else if(synced) toast(synced+" offline change(s) synced.");
+  if((synced||rejected) && CUR.view) render();
 }
 function hdrs(){ return { "Content-Type":"application/json", "x-token":TOKEN||"" }; }
 async function api(path, opts={}){
@@ -76,11 +89,25 @@ async function doPin(pin){
   catch(e){ toast(e.message||"Login failed"); }
 }
 async function doSso(){
-  const email=prompt("Microsoft 365 sign-in (demo). Enter your golden.com.fj email:","sameer@golden.com.fj");
+  let cfg=null; try{ cfg=await (await fetch("/api/config")).json(); }catch(e){}
+  const sso=(cfg&&cfg.sso)||{};
+  if(sso.enabled && sso.clientId && sso.tenantId){ // real Microsoft Entra ID via MSAL.js
+    try{
+      await ensureMsal();
+      const msalApp=new msal.PublicClientApplication({ auth:{ clientId:sso.clientId, authority:"https://login.microsoftonline.com/"+sso.tenantId, redirectUri:window.location.origin } });
+      if(msalApp.initialize) await msalApp.initialize();
+      const res=await msalApp.loginPopup({ scopes:["openid","profile","email"] });
+      const r=await api("/api/login",{method:"POST",body:{mode:"sso",idToken:res.idToken}});
+      TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp();
+    }catch(e){ toast(e.message||"Microsoft sign-in failed"); }
+    return;
+  }
+  const email=prompt("Microsoft 365 sign-in (demo). Enter your golden.com.fj email:","sameer@golden.com.fj"); // demo fallback (Entra not configured)
   if(!email) return;
   try{ const r=await api("/api/login",{method:"POST",body:{mode:"sso",email}}); TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp(); }
   catch(e){ toast(e.message||"SSO not recognised"); }
 }
+function ensureMsal(){ return new Promise((resolve,reject)=>{ if(window.msal)return resolve(); const s=document.createElement("script"); s.src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"; s.onload=()=>resolve(); s.onerror=()=>reject(new Error("Could not load Microsoft sign-in (offline?)")); document.head.appendChild(s); }); }
 function logout(){ TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; showLogin(); }
 function showApp(){
   $("#login").classList.add("hidden"); $("#appwrap").classList.remove("hidden");
@@ -98,15 +125,10 @@ function render(){ const v=CUR.view; if(v==="dashboard")dashboard(); else if(v==
 /* ---------- dashboard ---------- */
 async function dashboard(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
-  const jobs=await api("/api/jobs");
+  let jobs; try{ jobs=await api("/api/jobs"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load jobs — ${esc(e.message)}</div></div>`; return; }
+  window._dashJobs=jobs;
   const cnt=s=>jobs.filter(j=>j.status===s).length;
-  const rows=jobs.map(j=>{
-    const segs=[1,2,3,4].map((n,i)=>`<div class="seg ${j.completed>=n?'done':(i===j.completed?'cur':'')}"></div>`).join("");
-    return `<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||"")}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||"")}</div></td>
-      <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
-      <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${j.completed} of 4</div></td>
-      <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${esc(j.jobNo)}'})">Open</button></td></tr>`;
-  }).join("");
+  const machineOpts=[...new Set(jobs.map(j=>j.machine))].map(m=>`<option value="${esc(m)}">${esc(mlabel(m))}</option>`).join("");
   app().innerHTML=`
     <div class="stats">
       <div class="stat"><div class="n">${jobs.length}</div><div class="l">Total Jobs</div></div>
@@ -115,8 +137,37 @@ async function dashboard(){
       <div class="stat"><div class="n">${cnt('Hold')+cnt('Rejected')}</div><div class="l">Hold / Reject</div></div>
     </div>
     <div class="card"><h2>Active &amp; Recent Jobs</h2><p class="sub">Each Starkist job tracked through all four stages by one Job #.</p>
-    ${jobs.length?`<div style="overflow-x:auto"><table><thead><tr><th>Job #</th><th>Product</th><th>Machine</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No jobs yet.</div>`}
+    <div class="grid g4 no-print" style="margin-bottom:14px">
+      <div class="field"><label>Search</label><input id="dq" placeholder="Job #, product, customer" oninput="renderJobRows()"></div>
+      <div class="field"><label>Status</label><select id="dstatus" onchange="renderJobRows()"><option value="">All statuses</option><option>New</option><option>In Progress</option><option>Released</option><option>Hold</option><option>Rejected</option></select></div>
+      <div class="field"><label>Machine</label><select id="dmachine" onchange="renderJobRows()"><option value="">All machines</option>${machineOpts}</select></div>
+      <div class="field"><label>Export</label><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button></div>
+    </div>
+    ${jobs.length?`<div style="overflow-x:auto"><table><thead><tr><th>Job #</th><th>Product</th><th>Machine</th><th>Progress</th><th>Status</th><th></th></tr></thead><tbody id="jobtbody"></tbody></table></div><div class="empty hidden" id="jobempty" style="padding:18px">No jobs match the filter.</div>`:`<div class="empty">No jobs yet.</div>`}
     <div class="row-actions"><button class="btn gold" onclick="go('new')">+ New Job</button><button class="btn ghost" onclick="go('lookup')">Look up a Job #</button></div></div>`;
+  if(jobs.length) renderJobRows();
+}
+function jobRow(j){
+  const segs=[1,2,3,4].map((n,i)=>`<div class="seg ${j.completed>=n?'done':(i===j.completed?'cur':'')}"></div>`).join("");
+  return `<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||"")}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||"")}</div></td>
+    <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
+    <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${j.completed} of 4</div></td>
+    <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button></td></tr>`;
+}
+function renderJobRows(){
+  const q=(val("dq")||"").toLowerCase().trim(), st=val("dstatus"), mc=val("dmachine");
+  let list=(window._dashJobs||[]);
+  if(q) list=list.filter(j=>((j.jobNo||"")+" "+(j.product||"")+" "+(j.customer||"")).toLowerCase().includes(q));
+  if(st) list=list.filter(j=>j.status===st);
+  if(mc) list=list.filter(j=>j.machine===mc);
+  const tb=$("#jobtbody"); if(!tb)return; tb.innerHTML=list.map(jobRow).join("");
+  const e=$("#jobempty"); if(e)e.classList.toggle("hidden",!!list.length);
+}
+async function exportCsv(){
+  try{ const r=await fetch("/api/export/jobs.csv",{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
+    const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download="golden-qa-jobs.csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); toast("CSV exported"); }
+  catch(e){ toast("Export failed — are you online?"); }
 }
 
 /* ---------- new job ---------- */
@@ -155,13 +206,13 @@ async function entry(){
     app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job.</p>${jobs.length?`<div class="field" style="max-width:460px"><label>Select Job #</label><select onchange="if(this.value)go('entry',{jobNo:this.value})"><option value="">— Select —</option>${jobs.map(j=>`<option value="${esc(j.jobNo)}">${esc(j.jobNo)} — ${esc(j.product||'')}</option>`).join("")}</select></div>`:`<div class="empty">No jobs. <button class="btn gold" onclick="go('new')">+ New Job</button></div>`}</div>`; return; }
   JOB=await api("/api/jobs/"+encodeURIComponent(CUR.jobNo));
   const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=[1,2,3,4].filter(done).length;
-  const bar=STAGES.map(s=>`<button class="${CUR.stage===s.key?'active':''}" onclick="go('entry',{jobNo:'${esc(JOB.jobNo)}',stage:'${s.key}'})"><div class="s-no">Stage ${s.no} · ${esc(s.form)}</div><div class="s-nm">${esc(s.name)}</div><div class="s-st">${done(s.no)?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div></button>`).join("");
+  const bar=STAGES.map(s=>`<button class="${CUR.stage===s.key?'active':''}" onclick="go('entry',{jobNo:'${jsq(JOB.jobNo)}',stage:'${s.key}'})"><div class="s-no">Stage ${s.no} · ${esc(s.form)}</div><div class="s-nm">${esc(s.name)}</div><div class="s-st">${done(s.no)?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div></button>`).join("");
   const canHold=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
   app().innerHTML=`<div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
       <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}</p></div>
-      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${esc(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn danger sm" onclick="holdJob('${esc(JOB.jobNo)}')">Hold</button>`:''}</div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''}</div>
     </div>
     <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
     <div class="stagebar">${bar}</div><div id="stageform"></div></div>`;
@@ -261,13 +312,32 @@ function sigClear(){ const c=window._sigCanvas; if(c)c.getContext("2d").clearRec
 async function sigSave(){ const c=window._sigCanvas; if(!c)return; const dataUrl=c.toDataURL("image/png"); try{ const r=await api("/api/upload",{method:"POST",body:{dataUrl,name:"sig.png"}}); window._sig=r.url; $("#sigState").textContent="✓ signature captured"; toast("Signature saved"); }catch(e){ toast("Save failed"); } }
 
 /* save */
-function saveBar(stage){ return `<div class="row-actions no-print" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn" onclick="saveStage('${stage}',false)">Save Draft</button><button class="btn gold" onclick="saveStage('${stage}',true)">Save &amp; Mark Complete</button><button class="btn ghost" onclick="go('entry',{jobNo:'${esc(JOB.jobNo)}'})">Back</button></div>`; }
+function saveBar(stage){ return `<div class="row-actions no-print" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn" onclick="saveStage('${stage}',false)">Save Draft</button><button class="btn gold" onclick="saveStage('${stage}',true)">Save &amp; Mark Complete</button><button class="btn ghost" onclick="go('entry',{jobNo:'${jsq(JOB.jobNo)}'})">Back</button></div>`; }
+/* required-field check when marking a stage complete (mirrors server validateComplete) */
+function validateStageData(stage,d){
+  const reqs={
+    stage1:[["date","Date"],["qaOfficer","QA Officer"],["proceed","Proceed With Job"],["materialType","Material Type"]],
+    stage2:[["date","Date"],["qaOfficer","QA Officer"]],
+    stage3:[["date","Date"],["operatorName","Operator"],["startTime","Start Time"],["finishTime","Finish Time"]],
+    stage4:[["date","Date"],["qcName","QC Name"],["statusFinal","Final Release Decision"]]
+  };
+  const miss=[]; (reqs[stage]||[]).forEach(([k,l])=>{ if(!String(d[k]||"").trim()) miss.push(l); });
+  if(stage==="stage2" && !((d.rows||[]).some(r=>String(r.totalMeters||"").trim()||String(r.defect||"").trim()))) miss.push("At least one reel row");
+  if(stage==="stage4"){ if(!((d.checks||[]).some(c=>String(c.time||"").trim()))) miss.push("At least one hourly check"); if(!d.signature) miss.push("Signature"); }
+  return miss;
+}
 async function saveStage(stage,done){ let data={_done:done};
   if(stage==="stage1"){ collectSt(); data.stations=window._st; ["date","productDescription","proceed","qaOfficer","operator","supervisor","materialType","thicknessGrammage","substrate","batchDetails","dyneLevel","supplier","unwinderTension","infeedTension","rewindTension","outfeedTension","machineSpeed","airPressure","chillerTemp","corona","textColorLayout","printScuffing","cofFilmMetal","cofFilmFilm","scotchTape","gs1Barcode","printRegistration","tackSetoff","comments"].forEach(k=>data[k]=val("s1_"+k)); }
   else if(stage==="stage2"){ collectRw(); data.rows=window._rows; ["date","machineName","shift","qaOfficer","operator","avtRef","remarks"].forEach(k=>data[k]=val("s2_"+k)); }
   else if(stage==="stage3"){ collectRl(); data.rolls=window._rolls; ["date","customerItem","operatorName","startTime","finishTime","thickness","colours","register","copy","barcode","webTension","curling","cuttingAccuracy","setupHours","dtMaterial","dtWindup","dtDamage","dtMechanical","dtElectrical","dtOthers","operatorRemarks","qcRemarks"].forEach(k=>data[k]=val("s3_"+k)); }
   else if(stage==="stage4"){ collectCk(); data.checks=window._checks; ["date","productItem","shift","shiftStartFinish","labelWidth","labelLength","labelThickness","labelGauge","rejectedQty","operatorName","qcName","packersNames","statusFinal","reasonsRejection","remarks"].forEach(k=>data[k]=val("s4_"+k)); if(window._sig)data.signature=window._sig; else if(JOB.stage4)data.signature=JOB.stage4.signature; }
   data.photos=window._photos||[];
+  if(done){
+    const n=Number(stage.slice(-1));
+    for(let k=1;k<n;k++){ if(!(JOB["stage"+k]&&JOB["stage"+k]._done)){ toast("Complete Stage "+k+" before marking Stage "+n+" complete"); return; } }
+    const miss=validateStageData(stage,data);
+    if(miss.length){ toast("Can't complete — missing: "+miss.join(", ")); return; }
+  }
   try{ await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/stage/"+stage.slice(-1),{method:"PUT",body:{data},queueable:true,optimistic:{}}); toast(done?"Stage complete":"Draft saved"); go("entry",{jobNo:JOB.jobNo,stage}); }
   catch(e){ toast(e.message); }
 }
@@ -302,13 +372,14 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); i
   const b=j.stage2||{}; let s2h=""; if(b._done){ s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b); }
   const e=j.stage3||{}; let s3h=""; if(e._done){ s3h=kvb([["Date",e.date],["Operator",e.operatorName],["Start",e.startTime],["Finish",e.finishTime],["Colours",e.colours],["Register",e.register],["Barcode",e.barcode],["Cutting",e.cuttingAccuracy]])+`<h4>Rolls</h4><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Reel W</th><th>Size</th><th>Total</th><th>Waste Kg</th><th>Good</th></tr></thead><tbody>${(e.rolls||[]).map(r=>`<tr><td>${esc(r.no)}</td><td>${esc(r.reelWidth)}</td><td>${esc(r.size)}</td><td>${esc(r.totalSheets)}</td><td>${esc(r.wasteKg)}</td><td>${esc(r.goodSheets)}</td></tr>`).join("")}</tbody></table></div>`+photosView(e); }
   const f=j.stage4||{}; let s4h=""; if(f._done){ const hdr=`<tr><th>Time</th>${QC_PARAMS.map(p=>`<th title="${esc(p)}">${esc(p.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${QC_PARAMS.map(p=>{const v=c.vals&&c.vals[p];return `<td>${v==="Yes"?'<span class="pill green">Y</span>':v==="No"?'<span class="pill red">N</span>':esc(v||"—")}</td>`}).join("")}</tr>`).join("")||`<tr><td colspan=${QC_PARAMS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Rejected Qty",f.rejectedQty],["Decision",f.statusFinal],["QC",f.qcName]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
-  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${esc(j.jobNo)}'})">Edit</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
+  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
 
 /* analytics */
 async function analyticsView(){
   app().innerHTML=`<div class="card"><h2>Quality Analytics</h2><p class="sub">Live from recorded inspection data.</p>
+    ${["Supervisor","Quality Manager","Administrator"].includes(ME.role)?`<div class="row-actions no-print"><button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button></div>`:''}
     <div class="stats" id="kpis"></div>
     <div class="grid g2"><div><h3>Defects by type (Kg)</h3><canvas id="cDef" height="220"></canvas></div><div><h3>Waste by machine (Kg)</h3><canvas id="cWaste" height="220"></canvas></div></div>
     <div class="grid g2"><div><h3>Down-time analysis (hrs)</h3><canvas id="cDt" height="220"></canvas></div><div><h3>First-pass yield</h3><canvas id="cFpy" height="220"></canvas></div></div></div>`;
@@ -325,16 +396,41 @@ async function analyticsView(){
   CHARTS.fpy=new Chart($("#cFpy"),{type:"doughnut",data:{labels:["Released","Other"],datasets:[{data:[a.kpis.firstPassYield,100-a.kpis.firstPassYield],backgroundColor:["#15803d","#e8edf3"]}]},options:{circumference:180,rotation:270}});
 }
 
+async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"POST"}); if(r.ok) toast("Digest emailed to managers"); else toast("Digest "+(r.teams?"sent to Teams":"not sent")+(r.error&&r.error!=="email disabled"?" — "+r.error:" (configure SMTP/Teams in Admin)")); }catch(e){ toast(e.message); } }
+
 /* admin */
 async function admin(){
-  const md=MD; const audit=await api("/api/audit");
-  app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, integrations and audit trail. Role: ${esc(ME.role)}</p>
+  const md=MD; let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
+  const canManage=["Quality Manager","Administrator"].includes(ME.role);
+  let users=[]; try{ users = canManage ? await api("/api/admin/users") : await (await fetch("/api/users")).json(); }catch(e){ users=[]; }
+  window._users=users;
+  const userRows=users.map(u=>`<tr><td><b>${esc(u.id)}</b></td><td>${esc(u.name)}</td><td>${esc(u.role)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="userModal('${jsq(u.id)}')">Edit</button> <button class="btn danger sm" onclick="delUser('${jsq(u.id)}')">Remove</button></td>`:''}</tr>`).join("");
+  app().innerHTML=`<div class="card"><h2>Admin</h2><p class="sub">Master data, users, integrations and audit trail. Role: ${esc(ME.role)}</p>
     <h3>Tolerances (auto pass/fail)</h3><div class="grid g4">${fT("t_cofMin","COF min",md.tolerances.cofMin)}${fT("t_cofMax","COF max",md.tolerances.cofMax)}${fT("t_reg","Registration max (mm)",md.tolerances.registrationMaxMm)}${fT("t_bc","Barcode min grade",md.tolerances.barcodeMinGrade)}</div><div class="row-actions"><button class="btn gold sm" onclick="saveTol()">Save tolerances</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
-    <h3>Users</h3><div style="overflow-x:auto"><table><thead><tr><th>User</th><th>Role</th></tr></thead><tbody>${md.users?'':''}</tbody></table></div>
+    <h3>Users ${canManage?`<button class="btn gold sm no-print" style="margin-left:8px" onclick="userModal()">+ Add user</button>`:''}</h3>
+    <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Role</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody>${userRows||`<tr><td colspan="4" style="color:var(--muted)">No users.</td></tr>`}</tbody></table></div>
+    ${canManage?'':'<p class="sub" style="margin-top:8px">Only a Quality Manager or Administrator can add or edit users.</p>'}
     <h3>Audit trail (latest 300)</h3><div style="overflow-x:auto;max-height:320px;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
+function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
+    <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
+    <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
+    <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
+    <div class="field"><label>PIN — 4 digits${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pin" inputmode="numeric" maxlength="4" placeholder="${u?'••••':'4 digits'}"></div>
+    <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), pin=val("u_pin").trim();
+  if(!name){ toast("Name is required"); return; }
+  try{
+    if(id){ const body={name,role}; if(pin){ if(!/^\d{4}$/.test(pin)){ toast("PIN must be 4 digits"); return; } body.pin=pin; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
+    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(!/^\d{4}$/.test(pin)){ toast("PIN must be 4 digits"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,pin}}); }
+    closeModal(); toast("User saved"); admin();
+  }catch(e){ toast(e.message); }
+}
+async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); admin(); }catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
 async function bcTest(){ const no=$("#bcNo").value.trim(); const out=$("#bcOut"); out.textContent="Looking up…"; try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); out.textContent=JSON.stringify(r,null,2); }catch(e){ out.textContent=e.message; } }
