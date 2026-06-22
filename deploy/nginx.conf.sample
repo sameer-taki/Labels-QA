@@ -1,0 +1,74 @@
+# Golden QA App - nginx reverse proxy (TLS terminating to the Node server).
+#
+# Equivalent to the Caddyfile but for nginx (no auto-cert: you supply the cert).
+# Drop this into your nginx config:
+#   Linux:   /etc/nginx/conf.d/golden-qa.conf  (or sites-available + symlink)
+#   Windows: include it from nginx.conf's http{} block.
+# Then:  nginx -t   &&   (sudo systemctl reload nginx | nginx -s reload)
+#
+# Provide a TLS cert/key:
+#   - Public DNS:  use certbot (Let's Encrypt) to populate the ssl_certificate paths.
+#   - Internal:    issue from your corporate/AD CA and install the internal CA
+#                  root on every tablet so browsers trust it (camera + PWA need HTTPS).
+
+# Redirect plain HTTP to HTTPS.
+server {
+    listen      80;
+    listen      [::]:80;
+    server_name qa.golden.com.fj;
+    return 301  https://$host$request_uri;
+}
+
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name qa.golden.com.fj;
+
+    # --- TLS ---------------------------------------------------------------
+    ssl_certificate     /etc/ssl/golden-qa/fullchain.pem;   # cert + intermediates
+    ssl_certificate_key /etc/ssl/golden-qa/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1h;
+
+    # --- Uploads: allow large photo/signature data URLs --------------------
+    client_max_body_size 25m;
+
+    # --- Sensible proxy timeouts -------------------------------------------
+    proxy_connect_timeout 30s;
+    proxy_send_timeout    60s;
+    proxy_read_timeout    60s;
+
+    # --- Access log --------------------------------------------------------
+    access_log /var/log/nginx/golden-qa.access.log;
+    error_log  /var/log/nginx/golden-qa.error.log;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+
+        # Forwarded / host headers so the app sees the real client + scheme.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # WebSocket-safe upgrade headers (future-proof for live sync/SSE).
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_buffering off;   # stream responses straight through
+    }
+}
+
+# Map required for the Connection upgrade header above. Place this in the
+# http{} block (NOT inside server{}). If you already define $connection_upgrade
+# elsewhere, omit this map to avoid a duplicate-definition error.
+#
+#   map $http_upgrade $connection_upgrade {
+#       default upgrade;
+#       ''      close;
+#   }

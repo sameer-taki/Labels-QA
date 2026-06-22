@@ -2,7 +2,13 @@
   "port": 3000,
   "host": "0.0.0.0",
   "orgName": "Golden Manufacturers Pte Ltd",
-  "sso": { "enabled": true, "allowedDomain": "golden.com.fj", "note": "Stub: replace verifySso() with Microsoft Entra ID token validation in production." },
+  "sso": {
+    "enabled": true,
+    "tenantId": "",
+    "clientId": "",
+    "allowedDomain": "golden.com.fj",
+    "note": "Leave tenantId/clientId blank for the demo e-mail sign-in. Fill BOTH with your Entra App registration GUIDs to require real Microsoft Entra ID id_token validation (see deploy/ENTRA-SSO-SETUP.md)."
+  },
   "businessCentral": {
     "enabled": false,
     "baseUrl": "http://bc-test.gml.com.fj:7048/BC140/ODataV4",
@@ -12,13 +18,32 @@
   },
   "notify": {
     "teamsWebhookUrl": "",
-    "email": { "enabled": false, "smtpHost": "", "from": "qa@golden.com.fj", "to": ["ateet@golden.com.fj"] },
-    "note": "Paste a Teams Incoming Webhook URL and/or SMTP details to enable hold/reject alerts."
+    "email": {
+      "enabled": false,
+      "smtpHost": "",
+      "smtpPort": 587,
+      "secure": false,
+      "user": "",
+      "pass": "",
+      "from": "qa@golden.com.fj",
+      "to": ["ateet@golden.com.fj"]
+    },
+    "note": "Paste a Teams Incoming Webhook URL and/or SMTP details to enable hold/reject alerts and the manager digest. secure=true uses implicit TLS (port 465); secure=false uses STARTTLS (port 587). Leave user/pass blank for an unauthenticated relay."
   },
   "tolerances": {
     "cofMin": 0.20, "cofMax": 0.40,
     "registrationMaxMm": 0.15,
     "barcodeMinGrade": "C",
     "note": "Used for auto pass/fail flags. Edit in Admin > Tolerances."
+  },
+  "storage": {
+    "driver": "json",
+    "path": "data/db.sqlite",
+    "note": "driver 'json' (default) writes data/db.json. Set 'sqlite' to use the built-in node:sqlite store at storage.path (requires Node 22.5+; falls back to JSON automatically if unavailable)."
+  },
+  "backup": {
+    "intervalMin": 180,
+    "keep": 48,
+    "note": "Rotating copies of data/db.json into data/backups/. intervalMin = minutes between snapshots; keep = how many newest snapshots to retain."
   }
 }

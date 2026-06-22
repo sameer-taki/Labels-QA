@@ -1,0 +1,48 @@
+# Golden QA App - systemd unit (Linux).
+#
+# INSTALL
+#   1. Copy the app to /opt/golden-qa  (so /opt/golden-qa/server.js exists).
+#   2. Create a service account:   sudo useradd --system --home /opt/golden-qa --shell /usr/sbin/nologin goldenqa
+#   3. Give it ownership of the data dir:   sudo chown -R goldenqa:goldenqa /opt/golden-qa/data
+#   4. Edit the paths/User/Port below if they differ from these defaults.
+#   5. sudo cp deploy/golden-qa.service /etc/systemd/system/golden-qa.service
+#   6. sudo systemctl daemon-reload
+#   7. sudo systemctl enable --now golden-qa
+#   8. Verify:  systemctl status golden-qa  &&  curl http://localhost:3000/api/health
+#   Logs:       journalctl -u golden-qa -f
+
+[Unit]
+Description=Golden QA Inspection Server (Starkist label QA, on-prem)
+Documentation=file:/opt/golden-qa/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust if Node is elsewhere (run: which node).
+ExecStart=/usr/bin/node server.js
+WorkingDirectory=/opt/golden-qa
+Environment=NODE_ENV=production
+Environment=PORT=3000
+User=goldenqa
+Group=goldenqa
+
+# Restart on any exit, throttled to avoid crash loops.
+Restart=always
+RestartSec=5
+
+# Logging to the journal.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=golden-qa
+
+# --- Hardening (the app only needs to write under data/) -------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Allow writes only to the app's data dir (db.json, uploads/, backups/).
+ReadWritePaths=/opt/golden-qa/data
+
+[Install]
+WantedBy=multi-user.target

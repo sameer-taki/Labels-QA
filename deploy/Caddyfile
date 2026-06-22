@@ -1,0 +1,66 @@
+# Golden QA App - Caddy reverse proxy (automatic HTTPS).
+#
+# Caddy is the simplest way to put the app behind HTTPS: with a real public
+# DNS name it obtains and renews a Let's Encrypt certificate automatically.
+# It terminates TLS and proxies plaintext to the Node server on localhost:3000.
+#
+# RUN:
+#   1. Install Caddy (https://caddyserver.com/docs/install).
+#   2. Put this file at /etc/caddy/Caddyfile (Linux) or next to caddy.exe (Windows).
+#   3. Linux:   sudo systemctl reload caddy
+#      Windows: caddy run --config .\Caddyfile      (or install as a service)
+#   4. Test:    curl https://qa.golden.com.fj/api/health
+#
+# Replace qa.golden.com.fj with your real hostname.
+
+qa.golden.com.fj {
+	# Forward everything to the local Node server.
+	reverse_proxy 127.0.0.1:3000
+
+	# Allow large photo/signature uploads (data URLs can be a few MB each).
+	request_body {
+		max_size 25MB
+	}
+
+	# Gzip text responses (HTML/JS/CSS/JSON).
+	encode gzip
+
+	# Access + error log.
+	log {
+		output file /var/log/caddy/golden-qa.log
+		format console
+	}
+}
+
+# ---------------------------------------------------------------------------
+# NO PUBLIC DNS? (internal/air-gapped plant network)
+#
+# Public Let's Encrypt certs require a publicly resolvable name. On an internal
+# network use ONE of:
+#
+# (A) Internal hostname + internal CA. Issue a cert from your corporate/AD CA
+#     for the internal name, then point Caddy at those files and disable ACME:
+#
+#       qa.golden.local {
+#           reverse_proxy 127.0.0.1:3000
+#           tls /etc/caddy/certs/qa.golden.local.crt /etc/caddy/certs/qa.golden.local.key
+#           request_body { max_size 25MB }
+#       }
+#
+#     Distribute the internal CA root to tablets (Settings > install CA cert)
+#     so browsers trust it and the PWA/camera work without warnings.
+#
+# (B) Caddy's built-in local CA (quick lab / pilot). Caddy mints its own cert:
+#
+#       https://qa.golden.local {
+#           reverse_proxy 127.0.0.1:3000
+#           tls internal
+#           request_body { max_size 25MB }
+#       }
+#
+#     Then install Caddy's root on each tablet:  caddy trust
+#     (Browsers will warn until that root is trusted on the device.)
+#
+# Tablets must resolve the chosen name (internal DNS A-record or hosts entry)
+# to this server's IP. HTTPS is required for the camera and PWA install to work.
+# ---------------------------------------------------------------------------
