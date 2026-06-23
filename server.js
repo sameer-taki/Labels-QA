@@ -605,6 +605,11 @@ async function api(req, res, url) {
     res.writeHead(200,{ 'Content-Type':'text/csv; charset=utf-8', 'Content-Disposition':'attachment; filename="golden-qa-jobs.csv"', 'Cache-Control':'no-store' });
     return res.end(csv);
   }
+  if (seg[0]==='export' && seg[1]==='workbook.xls' && method==='GET') {
+    const xml=workbookXls(); audit(user,'export-xls','', DB.jobs.length+' jobs');
+    res.writeHead(200,{ 'Content-Type':'application/vnd.ms-excel; charset=utf-8', 'Content-Disposition':'attachment; filename="golden-qa-report.xls"', 'Cache-Control':'no-store' });
+    return res.end(xml);
+  }
 
   return send(res,404,{error:'Unknown API route'});
 }
@@ -711,6 +716,50 @@ function suppliers(){
   });
   return Object.values(map).map(m=>({ supplier:m.supplier, jobs:m.jobs, released:m.released, holdReject:m.holdReject, defectKg:round(m.defectKg,2), wasteKg:round(m.wasteKg,2), fpy:m.jobs?Math.round(m.released/m.jobs*100):0 })).sort((a,b)=>b.jobs-a.jobs);
 }
+/* SpreadsheetML (.xls XML) multi-sheet workbook — opens natively in Excel/LibreOffice, zero deps. */
+function xmlEsc(v){ return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function xlsCell(v){ const t=(typeof v==='number')?'Number':'String'; return '<Cell><Data ss:Type="'+t+'">'+xmlEsc(v)+'</Data></Cell>'; }
+function xlsSheet(name, header, rows){
+  return '<Worksheet ss:Name="'+xmlEsc(String(name).slice(0,31))+'"><Table>'+
+    '<Row>'+header.map(h=>'<Cell ss:StyleID="hdr"><Data ss:Type="String">'+xmlEsc(h)+'</Data></Cell>').join('')+'</Row>'+
+    rows.map(r=>'<Row>'+r.map(xlsCell).join('')+'</Row>').join('')+'</Table></Worksheet>';
+}
+function workbookXls(){
+  const ml=m=>(DB.masterdata.machines&&DB.masterdata.machines[m]&&DB.masterdata.machines[m].label)||m;
+  const jobs=DB.jobs.map(j=>{ const s4=j.stage4||{}; return [j.jobNo, j.customer||'', j.product||'', ml(j.machine), j.created||'', jobStatus(j), completedStages(j), s4._done?(s4.statusFinal||''):'', s4._done?(s4.qcName||''):'']; });
+  const capas=(DB.capas||[]).map(c=>[c.id, c.jobNo||'', c.title||'', c.severity||'', c.status||'', c.owner||'', c.dueDate||'', c.effectiveness||'']);
+  const equip=(DB.equipment||[]).map(equipView).map(e=>[e.id, e.name||'', e.type||'', e.machine||'', e.calibratedOn||'', e.nextDue||'', e.calStatus]);
+  const sup=suppliers().map(s=>[s.supplier, s.jobs, s.released, s.holdReject, s.fpy, s.defectKg, s.wasteKg]);
+  return '<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'+
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'+
+    '<Styles><Style ss:ID="hdr"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0E2A47" ss:Pattern="Solid"/></Style></Styles>'+
+    xlsSheet('Jobs',['Job #','Customer','Product','Machine','Created','Status','Stages','S4 Decision','S4 QC'],jobs)+
+    xlsSheet('CAPAs',['CAPA','Job','Title','Severity','Status','Owner','Due','Effectiveness'],capas)+
+    xlsSheet('Equipment',['ID','Name','Type','Machine','Last cal.','Next due','Status'],equip)+
+    xlsSheet('Suppliers',['Supplier','Jobs','Released','Hold/Rej','FPY %','Defect kg','Waste kg'],sup)+
+    '</Workbook>';
+}
+
+/* Scheduled manager report (config.reports). Off by default; deduped per day in memory. */
+let _lastReportDate='';
+function maybeSendScheduledReport(){
+  try{
+    const cfg=CFG.reports||{}; const sched=String(cfg.schedule||'off').toLowerCase(); if(sched==='off') return;
+    const now=new Date(); const today=ymd(now); if(_lastReportDate===today) return;
+    if(now.getHours() < Number(cfg.hour!=null?cfg.hour:6)) return;
+    let due=false;
+    if(sched==='daily') due=true;
+    else if(sched==='weekly') due=(now.getDay()===Number(cfg.dayOfWeek!=null?cfg.dayOfWeek:1));
+    else if(sched==='monthly') due=(now.getDate()===Number(cfg.dayOfMonth!=null?cfg.dayOfMonth:1));
+    if(!due) return;
+    _lastReportDate=today;
+    const d=buildDigest(); const subject=CFG.orgName+' — Scheduled QA Report '+today;
+    EMAIL.send(CFG,{ subject, text:digestText(d), html:digestHtml(d) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Scheduled report email:', r.error); }).catch(()=>{});
+    try{ NOTIFY.alert(CFG, subject, digestText(d)); }catch(e){}
+    audit(null,'scheduled-report','', sched+' report sent'); saveDB();
+  }catch(e){ console.warn('Scheduled report check failed:', e && e.message); }
+}
+
 /* CAPA SLA: alert once (Teams/email) when an open CAPA passes its due date. */
 function checkCapaSla(){
   try{
@@ -782,6 +831,7 @@ process.on('SIGINT', ()=>shutdown('SIGINT'));
   catch(e){ console.error('FATAL: database init failed —', e && e.message); process.exit(1); }
   if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
   const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
+  const repTimer = setInterval(maybeSendScheduledReport, 60*60000); if (repTimer.unref) repTimer.unref(); maybeSendScheduledReport();
   server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+']'));
 })();
 

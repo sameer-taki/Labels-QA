@@ -221,6 +221,12 @@ async function exportCsv(){
     a.href=url; a.download="golden-qa-jobs.csv"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); toast("CSV exported"); }
   catch(e){ toast("Export failed — are you online?"); }
 }
+async function exportXls(){
+  try{ const r=await fetch("/api/export/workbook.xls",{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
+    const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=url; a.download="golden-qa-report.xls"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); toast("Excel report exported"); }
+  catch(e){ toast("Export failed — are you online?"); }
+}
 
 /* ---------- new job ---------- */
 function newJob(){
@@ -461,7 +467,7 @@ async function reports(){
       <div class="field"><label>Shift</label><select id="rp_shift" onchange="loadAnalytics()"><option value="">All shifts</option><option>Day</option><option>Night</option></select></div>
       <div class="field"><label>&nbsp;</label><button class="btn ghost" onclick="rpClear()">Clear filters</button></div>
     </div>
-    <div class="row-actions no-print"><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button>${isMgr?`<button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button>`:''}</div>
+    <div class="row-actions no-print"><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button><button class="btn ghost" onclick="exportXls()">⤓ Export Excel</button>${isMgr?`<button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button>`:''}</div>
     <div class="stats" id="kpis"></div>
     <h3>Quality trend (by job date)</h3><canvas id="cTrend" height="200"></canvas>
     <div class="grid g2"><div><h3>Defects by type (Kg)</h3><canvas id="cDef" height="220"></canvas></div><div><h3>Waste by machine (Kg)</h3><canvas id="cWaste" height="220"></canvas></div></div>
@@ -673,7 +679,7 @@ async function execDashboard(){
   let d; try{ d=await api("/api/exec"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load — ${esc(e.message)}</div></div>`; return; }
   const ragCard=k=>`<div class="stat rag-${esc(k.rag)}"><div class="n">${esc(k.value)}${k.unit==='%'?'%':''}</div><div class="l">${esc(k.label)}</div><div class="rag-target">target ${k.dir==='min'?'≥':'≤'} ${esc(k.target)}${k.unit==='%'?'%':''}</div></div>`;
   const listCard=(title,items,render,empty)=>`<div class="card" style="margin-bottom:0"><h3 style="margin-top:0">${title}</h3>${items.length?items.map(render).join(""):`<p class="sub">${empty}</p>`}</div>`;
-  app().innerHTML=`<div class="card no-print"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Executive Overview</h2><p class="sub" style="margin:4px 0 0">${esc(d.org)} · live KPIs vs targets · ${esc(new Date(d.generated).toLocaleString())}</p></div><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('settings')">Edit targets</button></div></div>
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Executive Overview</h2><p class="sub" style="margin:4px 0 0">${esc(d.org)} · live KPIs vs targets · ${esc(new Date(d.generated).toLocaleString())}</p></div><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('settings')">Edit targets</button> <button class="btn gold sm" onclick="window.print()">📄 Print / PDF</button></div></div>
       <div class="stats" style="margin-bottom:0">${d.kpis.map(ragCard).join("")}</div></div>
     <div class="grid g2">
       ${listCard('Overdue CAPAs', d.lists.overdueCapas, c=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(c.id)}</b> ${capaSevPill(c.severity)} — ${esc(c.title)} <span class="flag bad">due ${esc(c.dueDate)}</span></div>`, 'None overdue. 👍')}

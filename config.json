@@ -51,5 +51,12 @@
     "windowMin": 15,
     "lockMin": 15,
     "note": "Password-login throttle: after maxLoginFails wrong attempts (per username+IP) within windowMin minutes, that login is locked for lockMin minutes. In-memory; resets on restart."
+  },
+  "reports": {
+    "schedule": "off",
+    "hour": 6,
+    "dayOfWeek": 1,
+    "dayOfMonth": 1,
+    "note": "Automatic manager digest emails. schedule = off | daily | weekly | monthly. hour = 0-23 (server local time); dayOfWeek 0=Sun..6=Sat for weekly; dayOfMonth 1-28 for monthly. Sends to notify.email.to via SMTP and/or the Teams webhook."
   }
 }

@@ -117,14 +117,18 @@ machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
 Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · Business Central + AVT
-import · hold/reject alerts · **CAPA** corrective/preventive-action tracking · **equipment &
-calibration register** (due/overdue tracking) · **executive dashboard** (KPI targets + Red/Amber/Green) ·
-**tamper-evident (HMAC-chained) audit trail** with one-click integrity check · admin master-data editor ·
-**user management** (add/edit, password reset) · **login brute-force lockout** ·
-**stage-in-sequence enforcement** · **required-field validation** · **dashboard search/filter** ·
-**CSV export** · **manager e-mail/Teams digest** · **automatic rotating backups** + admin
-**restore** · optional **SQLite** storage · real **Microsoft Entra ID** SSO · smoke tests
-(`npm test`) · on-prem **deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
+import · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
+effectiveness check) · **NCR** non-conformance reports (promote to CAPA) · **equipment &
+calibration register** (due/overdue tracking) · **SPC** control charts (Cp/Cpk) · **supplier
+scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **tamper-evident
+(HMAC-chained) audit trail** with one-click integrity check · admin master-data editor ·
+**user management** (add/edit, password reset) · **training/competency gating** · **login
+brute-force lockout** · **stage-in-sequence enforcement** · **required-field validation** ·
+**dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +
+**scheduled reports** · read-only **REST API keys** · outbound **webhooks** · Prometheus
+**/metrics** · **automatic rotating backups** + admin **restore** · optional **SQLite** storage ·
+real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
+**deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ---
 

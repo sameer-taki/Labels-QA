@@ -427,6 +427,13 @@ async function main() {
     await request('PUT', '/api/masterdata', { competencyEnforced: false }, adminToken);
     await request('DELETE', '/api/admin/users/' + encodeURIComponent(compU), undefined, adminToken);
 
+    // 29. Excel workbook export (SpreadsheetML)
+    r = await request('GET', '/api/export/workbook.xls', undefined, adminToken);
+    eq('GET /api/export/workbook.xls -> 200', r.status, 200);
+    ok('workbook is SpreadsheetML with Jobs + CAPAs sheets',
+      typeof r.raw === 'string' && r.raw.indexOf('<Workbook') >= 0 && r.raw.indexOf('ss:Name="Jobs"') >= 0 && r.raw.indexOf('ss:Name="CAPAs"') >= 0,
+      (r.raw || '').slice(0, 60));
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));
