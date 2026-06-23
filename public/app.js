@@ -231,23 +231,16 @@ async function exportXls(){
 /* ---------- new job ---------- */
 function newJob(){
   const opts=Object.keys(MD.machines).map(m=>`<option value="${m}">${esc(MD.machines[m].label)} (${MD.machines[m].form})</option>`).join("");
-  app().innerHTML=`<div class="card"><h2>Start a New Job</h2><p class="sub">Pick the printing machine and enter the Job #. Scan the barcode or pull details from Business Central.</p>
+  app().innerHTML=`<div class="card"><h2>Start a New Job</h2><p class="sub">Pick the printing machine and enter the Job #. Scan the barcode (📷) to capture it.</p>
     <div class="grid g2">
       <div class="field"><label>Printing Machine <span class="req">*</span></label><select id="f_machine"><option value="">— Select —</option>${opts}</select></div>
       <div class="field"><label>Job # <span class="req">*</span></label>
-        <div style="display:flex;gap:8px"><input id="f_jobNo" placeholder="e.g. SK-24821"><button class="btn ghost sm" onclick="scanBarcode('f_jobNo')" title="Scan">📷</button></div>
-        <div class="row-actions"><button class="btn ghost sm" onclick="bcFill()">Pull from Business Central</button></div></div>
+        <div style="display:flex;gap:8px"><input id="f_jobNo" placeholder="e.g. SK-24821"><button class="btn ghost sm" onclick="scanBarcode('f_jobNo')" title="Scan">📷</button></div></div>
       <div class="field"><label>Customer</label><input id="f_customer" value="StarKist"></div>
       <div class="field"><label>Product / Item</label><input id="f_product" placeholder="Label description"></div>
     </div>
     <div class="field" style="margin-top:12px"><label>Job Description</label><textarea id="f_desc"></textarea></div>
     <div class="row-actions"><button class="btn gold" onclick="createJob()">Create Job &amp; Begin Stage 1</button><button class="btn ghost" onclick="go('dashboard')">Cancel</button></div></div>`;
-}
-async function bcFill(){
-  const no=$("#f_jobNo").value.trim(); if(!no){ toast("Enter a Job # first"); return; }
-  try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); if(r.error){ toast(r.error); return; }
-    if(r.item)$("#f_product").value=r.item; if(r.customer)$("#f_customer").value=r.customer; toast("Loaded from "+(r.source||"BC")); }
-  catch(e){ toast(e.message); }
 }
 async function createJob(){
   const machine=$("#f_machine").value, jobNo=$("#f_jobNo").value.trim();
@@ -802,7 +795,6 @@ async function settings(){
     <label style="text-transform:none;font-weight:600;display:flex;align-items:center;gap:10px;max-width:760px"><input type="checkbox" id="cmp_enf" ${md.competencyEnforced?'checked':''} style="width:auto;min-height:0">Enforce operator competency — block a stage sign-off unless the signer is qualified for that stage (set per user in Team &amp; Access; Administrators bypass).</label>
     <div class="row-actions"><button class="btn gold sm" onclick="saveCompetency()">Save</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
-    <h3>Business Central test</h3><div style="display:flex;gap:8px;max-width:520px"><input id="bcNo" placeholder="Job #"><button class="btn ghost sm" onclick="bcTest()">Lookup</button></div><pre id="bcOut" style="white-space:pre-wrap;background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px"></pre>
     <h3>Backups &amp; storage</h3><div class="kv">
       <div><span>Storage driver</span><b>${esc(health?health.storage:'?')}</b></div>
       <div><span>Latest backup</span><b>${backups&&backups.latest?esc(backups.latest.name):'none found'}</b></div>
@@ -865,7 +857,6 @@ async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role")
 async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); team(); }catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
-async function bcTest(){ const no=$("#bcNo").value.trim(); const out=$("#bcOut"); out.textContent="Looking up…"; try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); out.textContent=JSON.stringify(r,null,2); }catch(e){ out.textContent=e.message; } }
 
 /* register SW + boot */
 function showUpdateBanner(){ if(document.getElementById("updBanner"))return; const d=document.createElement("div"); d.id="updBanner"; d.className="upd-banner no-print"; d.innerHTML=`<span>A new version is available.</span><button class="btn gold sm" onclick="location.reload()">Reload</button>`; document.body.appendChild(d); }
