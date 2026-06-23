@@ -1,0 +1,59 @@
+# Golden QA App - Continuous Integration
+#
+# Runs on every pull request and on pushes to main. Gate branch protection on
+# the "app" checks so only green commits land on main.
+#
+# Deployment is NOT handled here. Portainer (GitOps) polls this GitHub repo and
+# redeploys the merged commit on the shared Docker host once it appears on main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: app (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check (node --check)
+        run: |
+          set -euo pipefail
+          # Parse-only check of server.js plus every .js under integrations/, public/, test/.
+          files=$(find server.js integrations public test -type f -name '*.js')
+          echo "Checking the following files:"
+          echo "$files"
+          for f in $files; do
+            node --check "$f"
+          done
+          echo "All JS files parsed successfully."
+
+      - name: Smoke test
+        # JSON-mode smoke test: spawns the server with no DATABASE_URL set,
+        # exercises the HTTP API, then restores data/db.json.
+        run: npm test

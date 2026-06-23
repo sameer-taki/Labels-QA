@@ -1,0 +1,108 @@
+# Golden QA App - PRODUCTION compose for the shared Traefik v3 host (Portainer GitOps).
+#
+# Mirrors the Golden Manufacturers standard deploy pattern (same as the Fibre Mold Plant):
+#   - Traefik v3 lives on the external 'web' network and terminates TLS.
+#   - The app publishes NO host port; Traefik routes to it container-to-container on 3000.
+#   - db + db-backup stay on the internal 'default' network only (not reachable from 'web').
+#
+# Deploy: set the variables from .env.example in the Portainer stack environment (or a .env
+# file next to this compose), point the stack at this repo, and let it build the app image.
+#
+# Required env (fail-fast via ${VAR:?}): APP_HOST, DB_PASSWORD, SECRET_KEY, ADMIN_PASSWORD.
+# Optional env: ADMIN_USERNAME (default 'admin'), TZ (timezone for the backup schedule and logs).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: goldenqa:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Postgres connection. Host 'db' is the service name on the default network.
+      DATABASE_URL: postgresql://goldenqa:${DB_PASSWORD:?set DB_PASSWORD in .env}@db:5432/goldenqa
+      # Session/token signing secret - app refuses to start in production without it.
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      # Seed the initial admin on first run against an empty database.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # The app reads this directory (mounted read-only below) to report the latest DB dump.
+      BACKUP_DIR: /backups
+      TZ: ${TZ:-Pacific/Fiji}
+    volumes:
+      # Uploaded photos/signatures - the only app-written persistent data in Postgres mode.
+      - goldenqa_uploads:/app/data/uploads
+      # Nightly pg dumps, mounted read-only so the admin panel can list the latest one.
+      - goldenqa_backups:/backups:ro
+    networks:
+      - web
+      - default
+    labels:
+      - "traefik.enable=true"
+      # Tell Traefik which network to use when reaching this container.
+      - "traefik.docker.network=web"
+      # HTTPS router on the 'websecure' entrypoint with TLS.
+      - "traefik.http.routers.goldenqa.rule=Host(`${APP_HOST:?set APP_HOST in .env}`)"
+      - "traefik.http.routers.goldenqa.entrypoints=websecure"
+      - "traefik.http.routers.goldenqa.tls=true"
+      - "traefik.http.routers.goldenqa.service=goldenqa"
+      # The app listens on 3000 inside the container.
+      - "traefik.http.services.goldenqa.loadbalancer.server.port=3000"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: goldenqa
+      POSTGRES_DB: goldenqa
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      TZ: ${TZ:-Pacific/Fiji}
+    volumes:
+      - goldenqa_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goldenqa -d goldenqa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - default
+
+  db-backup:
+    image: prodrigestivill/postgres-backup-local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: goldenqa
+      POSTGRES_DB: goldenqa
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      # Nightly at 00:00 (cron syntax). Retention: 7 daily / 4 weekly / 6 monthly.
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      TZ: ${TZ:-Pacific/Fiji}
+    volumes:
+      - goldenqa_backups:/backups
+    networks:
+      - default
+
+volumes:
+  goldenqa_pgdata:
+  goldenqa_uploads:
+  goldenqa_backups:
+
+networks:
+  # Shared Traefik network - created outside this stack.
+  web:
+    external: true
+  # Internal network for app <-> db <-> db-backup.
+  default:

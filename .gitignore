@@ -13,6 +13,7 @@ data/db.sqlite-shm
 # Environment / secrets
 .env
 .env.*
+!.env.example
 config.local.json
 
 # Logs

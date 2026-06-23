@@ -1,0 +1,44 @@
+# .dockerignore — keep the build context (and image) small & clean.
+# NOTE: package.json and package-lock.json are NOT ignored — they are
+# required by `npm ci --omit=dev` in the Dockerfile.
+
+# Dependencies — reinstalled in the image via `npm ci`.
+node_modules/
+
+# Version control / CI metadata.
+.git
+.gitignore
+.github/
+
+# Runtime data — system of record. Provided at runtime by named
+# volumes (goldenqa_uploads, goldenqa_pgdata, goldenqa_backups); must
+# never be copied into the image.
+data/
+backups/
+
+# Secrets / environment — supplied only via Portainer stack env / .env.
+.env
+.env.*
+config.local.json
+
+# Logs.
+*.log
+npm-debug.log*
+
+# Deployment artifacts & docs — not needed inside the image.
+deploy/
+DEPLOYMENT.md
+CONTAINER-DEPLOY.md
+README.md
+Dockerfile
+.dockerignore
+
+# Tests (not shipped in the runtime image).
+test/
+
+# OS / editor cruft.
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
