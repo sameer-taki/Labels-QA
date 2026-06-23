@@ -127,4 +127,16 @@ real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
 
 ---
 
+## 9. Documentation
+
+Full documentation lives in [`docs/`](docs):
+
+- **[docs/SYSTEM-GUIDE.md](docs/SYSTEM-GUIDE.md)** — architecture, every module, roles & permissions, data model, configuration, security, API reference.
+- **[docs/KNOWLEDGE-BASE.md](docs/KNOWLEDGE-BASE.md)** — how-to articles, FAQ, and troubleshooting (incl. deployment).
+- **[docs/USER-TRAINING.md](docs/USER-TRAINING.md)** — role-based training (QA Officer → Supervisor → Quality Manager → Administrator) with exercises and a quick-reference card.
+
+Deployment specifics: [DEPLOYMENT.md](DEPLOYMENT.md) (on-prem) · [CONTAINER-DEPLOY.md](CONTAINER-DEPLOY.md) (Portainer + Traefik).
+
+---
+
 *Golden Manufacturers Pte Ltd — built with Ateet Roshan (Quality Manager) & Sameer Mohammed Taki (AI Engineer).*
