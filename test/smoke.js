@@ -258,6 +258,55 @@ async function main() {
     r = await request('POST', '/api/login', { username: 'admin', password: 'newpass123' });
     eq('login with new password -> 200', r.status, 200);
 
+    // 15. tamper-evident audit chain
+    r = await request('GET', '/api/audit/verify', undefined, adminToken);
+    eq('GET /api/audit/verify -> 200', r.status, 200);
+    ok('audit chain intact (ok:true, checked>0)', !!(r.body && r.body.ok === true && r.body.checked > 0), JSON.stringify(r.body));
+
+    // 16. CAPA lifecycle
+    const CAPATITLE = 'Smoke CAPA ' + PID;
+    r = await request('POST', '/api/capas', { title: CAPATITLE, jobNo: JOB, severity: 'High', source: 'smoke' }, adminToken);
+    eq('POST /api/capas -> 200', r.status, 200);
+    const capaId = r.body && r.body.id;
+    ok('created CAPA has id and status Open', !!(capaId && r.body.status === 'Open'), JSON.stringify(r.body));
+
+    r = await request('POST', '/api/capas', { jobNo: JOB }, adminToken);
+    eq('POST /api/capas without title -> 400', r.status, 400);
+
+    r = await request('GET', '/api/capas?status=Open', undefined, adminToken);
+    ok('GET /api/capas?status=Open includes the new CAPA',
+      Array.isArray(r.body) && r.body.some((c) => c.id === capaId), JSON.stringify(r.body && r.body.length));
+
+    r = await request('PUT', '/api/capas/' + encodeURIComponent(capaId), { status: 'Closed', rootCause: 'identified' }, adminToken);
+    eq('PUT /api/capas/:id close -> 200', r.status, 200);
+    ok('closed CAPA has closedAt + closedBy',
+      !!(r.body && r.body.status === 'Closed' && r.body.closedAt && r.body.closedBy === 'admin'),
+      JSON.stringify(r.body && { s: r.body.status, by: r.body.closedBy }));
+
+    r = await request('POST', '/api/capas', { title: 'nope' }, officerToken);
+    eq('non-manager POST /api/capas -> 403', r.status, 403);
+
+    // 17. analytics with filters returns trend + openCapas
+    r = await request('GET', '/api/analytics?from=2000-01-01&to=2099-12-31', undefined, adminToken);
+    eq('GET /api/analytics (filtered) -> 200', r.status, 200);
+    ok('analytics has trend[] and kpis.openCapas',
+      !!(r.body && Array.isArray(r.body.trend) && typeof r.body.kpis.openCapas === 'number'),
+      JSON.stringify(r.body && r.body.kpis));
+
+    // 18. restore guards (no actual restore — destructive)
+    r = await request('POST', '/api/admin/restore', { name: '../../etc/passwd' }, adminToken);
+    eq('restore with bad name -> 400', r.status, 400);
+    r = await request('POST', '/api/admin/restore', { name: 'db-20260101-000000.json' }, officerToken);
+    eq('non-admin restore -> 403', r.status, 403);
+
+    // 19. login throttle: repeated failures lock the account out (unique user, isolated key)
+    const LOCKUSER = 'lockme' + PID;
+    let lastStatus = 0;
+    for (let i = 0; i < 5; i++) { const rr = await request('POST', '/api/login', { username: LOCKUSER, password: 'bad' }); lastStatus = rr.status; }
+    ok('5 bad logins all returned 401', lastStatus === 401, 'last=' + lastStatus);
+    r = await request('POST', '/api/login', { username: LOCKUSER, password: 'bad' });
+    eq('6th attempt locked out -> 429', r.status, 429);
+
   } catch (e) {
     failed++;
     console.log('FAIL  unexpected error during run -> ' + (e && e.stack ? e.stack : e));

@@ -45,5 +45,11 @@
     "intervalMin": 180,
     "keep": 48,
     "note": "Rotating copies of data/db.json into data/backups/. intervalMin = minutes between snapshots; keep = how many newest snapshots to retain."
+  },
+  "security": {
+    "maxLoginFails": 5,
+    "windowMin": 15,
+    "lockMin": 15,
+    "note": "Password-login throttle: after maxLoginFails wrong attempts (per username+IP) within windowMin minutes, that login is locked for lockMin minutes. In-memory; resets on restart."
   }
 }

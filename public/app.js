@@ -11,6 +11,7 @@ const NAV = [
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
   ]},
+  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"} ]},
   { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"} ]},
   { group:"Settings", items:[
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
@@ -28,7 +29,8 @@ const ICONS = {
   users:"M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
   audit:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h6",
   gear:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
-  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8"
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
+  capa:"M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-5 9 2 2 4-4"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -52,6 +54,9 @@ function jsq(v){ return esc(String(v==null?"":v).replace(/\\/g,"\\\\").replace(/
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2300); }
 function statusPill(s){ const m={"New":"grey","In Progress":"amber","Released":"green","Hold":"red","Rejected":"red"}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
 function mlabel(m){ return MD&&MD.machines&&MD.machines[m]?MD.machines[m].label:m; }
+function isMgrRole(){ return !!ME && ["Supervisor","Quality Manager","Administrator"].includes(ME.role); }
+function capaSevPill(s){ const m={Low:"grey",Medium:"blue",High:"amber",Critical:"red"}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
+function capaStatusPill(s){ const m={Open:"amber","In Progress":"blue",Closed:"green"}; return `<span class="pill ${m[s]||'grey'}">${esc(s)}</span>`; }
 
 /* ---------- offline-aware API ---------- */
 function setNet(){ const d=$("#netdot"); if(!d)return; if(navigator.onLine){ d.classList.remove("off"); d.title="online"; } else { d.classList.add("off"); d.title="offline - changes queued"; } }
@@ -159,7 +164,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="capa")capaPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -253,7 +258,7 @@ async function entry(){
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
       <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}</p></div>
-      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn ghost sm" onclick="raiseCapaFor('${jsq(JOB.jobNo)}')">Raise CAPA</button>`:''} ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
     </div>
     <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
     <div class="stagebar">${bar}</div><div id="stageform"></div></div>`;
@@ -441,16 +446,31 @@ function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div 
 
 /* reports */
 async function reports(){
-  const isMgr=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
+  const isMgr=isMgrRole();
   app().innerHTML=`<div class="card"><h2>Reports</h2><p class="sub">Live quality analytics from recorded inspection data.</p>
+    <div class="grid g4 no-print" style="margin-bottom:6px">
+      <div class="field"><label>From</label><input id="rp_from" type="date" onchange="loadAnalytics()"></div>
+      <div class="field"><label>To</label><input id="rp_to" type="date" onchange="loadAnalytics()"></div>
+      <div class="field"><label>Shift</label><select id="rp_shift" onchange="loadAnalytics()"><option value="">All shifts</option><option>Day</option><option>Night</option></select></div>
+      <div class="field"><label>&nbsp;</label><button class="btn ghost" onclick="rpClear()">Clear filters</button></div>
+    </div>
     <div class="row-actions no-print"><button class="btn ghost" onclick="exportCsv()">⤓ Export CSV</button>${isMgr?`<button class="btn ghost" onclick="sendDigest()">✉ Email digest to managers</button>`:''}</div>
     <div class="stats" id="kpis"></div>
+    <h3>Quality trend (by job date)</h3><canvas id="cTrend" height="200"></canvas>
     <div class="grid g2"><div><h3>Defects by type (Kg)</h3><canvas id="cDef" height="220"></canvas></div><div><h3>Waste by machine (Kg)</h3><canvas id="cWaste" height="220"></canvas></div></div>
     <div class="grid g2"><div><h3>Down-time analysis (hrs)</h3><canvas id="cDt" height="220"></canvas></div><div><h3>First-pass yield</h3><canvas id="cFpy" height="220"></canvas></div></div></div>`;
-  const a=await api("/api/analytics");
-  $("#kpis").innerHTML=`<div class="stat"><div class="n">${a.kpis.total}</div><div class="l">Jobs</div></div><div class="stat"><div class="n">${a.kpis.released}</div><div class="l">Released</div></div><div class="stat"><div class="n">${a.kpis.rejectedJobs}</div><div class="l">Hold / Reject</div></div><div class="stat"><div class="n">${a.kpis.firstPassYield}%</div><div class="l">First-Pass Yield</div></div>`;
+  loadAnalytics();
+}
+function rpClear(){ ["rp_from","rp_to"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); const s=document.getElementById("rp_shift"); if(s)s.value=""; loadAnalytics(); }
+async function loadAnalytics(){
+  const qs=new URLSearchParams(); const f=val("rp_from"), t=val("rp_to"), sh=val("rp_shift");
+  if(f)qs.set("from",f); if(t)qs.set("to",t); if(sh)qs.set("shift",sh);
+  let a; try{ a=await api("/api/analytics"+(qs.toString()?("?"+qs.toString()):"")); }catch(e){ toast(e.message); return; }
+  const k=$("#kpis"); if(k) k.innerHTML=`<div class="stat"><div class="n">${a.kpis.total}</div><div class="l">Jobs</div></div><div class="stat"><div class="n">${a.kpis.released}</div><div class="l">Released</div></div><div class="stat"><div class="n">${a.kpis.rejectedJobs}</div><div class="l">Hold / Reject</div></div><div class="stat"><div class="n">${a.kpis.firstPassYield}%</div><div class="l">First-Pass Yield</div></div><div class="stat" style="cursor:pointer" onclick="go('capa')" title="View CAPAs"><div class="n">${a.kpis.openCapas||0}</div><div class="l">Open CAPAs</div></div>`;
   if(!window.Chart){ toast("Charts need internet (Chart.js) the first time"); return; }
   Object.values(CHARTS).forEach(c=>{try{c.destroy()}catch(e){}}); CHARTS={};
+  const tr=a.trend||[];
+  CHARTS.trend=new Chart($("#cTrend"),{type:"line",data:{labels:tr.map(d=>d.date),datasets:[{label:"Jobs",data:tr.map(d=>d.jobs),borderColor:"#0e2a47",backgroundColor:"rgba(14,42,71,.08)",tension:.3,fill:true},{label:"Released",data:tr.map(d=>d.released),borderColor:"#15803d",tension:.3},{label:"Hold/Reject",data:tr.map(d=>d.held),borderColor:"#b91c1c",tension:.3}]},options:{plugins:{legend:{position:"bottom"}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
   const defE=Object.entries(a.defects).sort((x,y)=>y[1]-x[1]);
   CHARTS.def=new Chart($("#cDef"),{type:"bar",data:{labels:defE.map(d=>d[0]),datasets:[{label:"Kg",data:defE.map(d=>d[1]),backgroundColor:"#d4a017"}]},options:{plugins:{legend:{display:false}}}});
   const wE=Object.entries(a.wasteByMachine);
@@ -461,6 +481,69 @@ async function reports(){
 }
 
 async function sendDigest(){ try{ const r=await api("/api/digest/send",{method:"POST"}); if(r.ok) toast("Digest emailed to managers"); else toast("Digest "+(r.teams?"sent to Teams":"not sent")+(r.error&&r.error!=="email disabled"?" — "+r.error:" (configure SMTP/Teams in Admin)")); }catch(e){ toast(e.message); } }
+
+/* CAPA — corrective & preventive actions */
+async function capaPage(){
+  const canManage=isMgrRole();
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let capas=[]; try{ capas=await api("/api/capas"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load CAPAs — ${esc(e.message)}</div></div>`; return; }
+  window._capas=capas;
+  const open=capas.filter(c=>c.status!=='Closed').length;
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><h2 style="margin:0">CAPA — Corrective &amp; Preventive Actions</h2><p class="sub" style="margin:4px 0 0">Track and close quality events. ${open} open of ${capas.length}.</p></div>
+      <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="capaModal()">+ Raise CAPA</button>`:''}</div></div>
+    <div class="grid g3 no-print" style="margin:4px 0 14px">
+      <div class="field"><label>Status</label><select id="cq_status" onchange="renderCapaRows()"><option value="">All</option><option>Open</option><option>In Progress</option><option>Closed</option></select></div>
+      <div class="field"><label>Search</label><input id="cq_q" placeholder="Job #, title, owner" oninput="renderCapaRows()"></div>
+    </div>
+    ${capas.length?`<div style="overflow-x:auto"><table><thead><tr><th>CAPA</th><th>Job</th><th>Title</th><th>Severity</th><th>Owner</th><th>Due</th><th>Status</th>${canManage?'<th class="no-print"></th>':''}</tr></thead><tbody id="capabody"></tbody></table></div><div class="empty hidden" id="capaempty" style="padding:18px">No CAPAs match the filter.</div>`:`<div class="empty">No CAPAs yet.${canManage?' Raise one when a job is held or a defect recurs.':''}</div>`}</div>`;
+  if(capas.length) renderCapaRows();
+}
+function renderCapaRows(){
+  const canManage=isMgrRole(); const today=new Date().toISOString().slice(0,10);
+  const st=val("cq_status"), q=(val("cq_q")||"").toLowerCase().trim();
+  let list=(window._capas||[]);
+  if(st) list=list.filter(c=>c.status===st);
+  if(q) list=list.filter(c=>((c.jobNo||"")+" "+(c.title||"")+" "+(c.owner||"")).toLowerCase().includes(q));
+  const tb=$("#capabody"); if(!tb)return;
+  tb.innerHTML=list.map(c=>{ const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
+    return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button></td>`:''}</tr>`;
+  }).join("");
+  const e=$("#capaempty"); if(e)e.classList.toggle("hidden",!!list.length);
+}
+function capaModal(id, prefill){
+  const c=id?(window._capas||[]).find(x=>x.id===id):null; const p=prefill||{};
+  const curSev=c?c.severity:(p.severity||'Medium');
+  const sevOpts=["Low","Medium","High","Critical"].map(s=>`<option ${curSev===s?'selected':''}>${s}</option>`).join("");
+  const stOpts=["Open","In Progress","Closed"].map(s=>`<option ${c&&c.status===s?'selected':''}>${s}</option>`).join("");
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${c?esc(c.id):'Raise CAPA'}</h2>
+    <div class="grid g2">
+      <div class="field"><label>Job # (optional)</label><input id="ca_jobNo" value="${esc(c?c.jobNo:(p.jobNo||''))}"></div>
+      <div class="field"><label>Severity</label><select id="ca_sev">${sevOpts}</select></div>
+    </div>
+    <div class="field"><label>Title <span class="req">*</span></label><input id="ca_title" value="${esc(c?c.title:(p.title||''))}" placeholder="Short description of the issue"></div>
+    <div class="field"><label>Source</label><input id="ca_source" value="${esc(c?c.source:(p.source||''))}" placeholder="e.g. Reel Inspection (F-021), customer complaint"></div>
+    <div class="field"><label>Root cause</label><textarea id="ca_root">${esc(c?c.rootCause:'')}</textarea></div>
+    <div class="field"><label>Corrective action</label><textarea id="ca_corr">${esc(c?c.correctiveAction:'')}</textarea></div>
+    <div class="field"><label>Preventive action</label><textarea id="ca_prev">${esc(c?c.preventiveAction:'')}</textarea></div>
+    <div class="grid g3">
+      <div class="field"><label>Owner</label><input id="ca_owner" value="${esc(c?c.owner:'')}" placeholder="who's responsible"></div>
+      <div class="field"><label>Due date</label><input id="ca_due" type="date" value="${esc(c?c.dueDate:'')}"></div>
+      ${c?`<div class="field"><label>Status</label><select id="ca_status">${stOpts}</select></div>`:''}
+    </div>
+    ${c&&c.closedAt?`<p class="sub">Closed by ${esc(c.closedBy)} on ${esc(c.closedAt.slice(0,10))}.</p>`:''}
+    <div class="row-actions"><button class="btn gold" onclick="saveCapa(${c?`'${jsq(c.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveCapa(id){
+  const body={ jobNo:val("ca_jobNo").trim(), severity:val("ca_sev"), title:val("ca_title").trim(), source:val("ca_source").trim(),
+    rootCause:val("ca_root"), correctiveAction:val("ca_corr"), preventiveAction:val("ca_prev"), owner:val("ca_owner").trim(), dueDate:val("ca_due") };
+  if(!body.title){ toast("A CAPA title is required"); return; }
+  const stSel=document.getElementById("ca_status"); if(stSel) body.status=stSel.value;
+  try{ if(id) await api("/api/capas/"+encodeURIComponent(id),{method:"PUT",body}); else await api("/api/capas",{method:"POST",body});
+    closeModal(); toast("CAPA saved"); capaPage();
+  }catch(e){ toast(e.message); }
+}
+function raiseCapaFor(no){ const ov=JOB&&JOB.statusOverride; capaModal(null,{ jobNo:no, severity:(ov==='Hold'||ov==='Rejected')?'High':'Medium', source:ov?('Job '+ov):'In-process inspection' }); }
 
 /* team & access */
 async function team(){
@@ -475,9 +558,19 @@ async function team(){
 }
 /* audit trail */
 async function auditTrail(){
+  const canManage=isMgrRole();
   let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
-  app().innerHTML=`<div class="card"><h2>Audit Trail</h2><p class="sub">Immutable log of the latest 300 actions.</p>
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><h2 style="margin:0">Audit Trail</h2><p class="sub" style="margin:4px 0 0">Tamper-evident log of the latest 300 actions (HMAC-chained).</p></div>
+      ${canManage?`<div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="verifyAudit()">Verify integrity</button></div>`:''}</div>
+    <div id="auditVerify" class="no-print" style="margin:6px 0 12px"></div>
     <div style="overflow-x:auto;max-height:72vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.length?audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join(""):`<tr><td colspan="5" style="color:var(--muted)">No audit entries yet.</td></tr>`}</tbody></table></div></div>`;
+}
+async function verifyAudit(){ const host=$("#auditVerify"); if(host)host.innerHTML='<span class="sub">Checking…</span>';
+  try{ const r=await api("/api/audit/verify");
+    if(r.ok) host.innerHTML=`<div class="banner" style="background:var(--green-bg);border-color:#aee0bf;color:var(--green)">✓ Audit chain intact — ${r.checked} entr${r.checked===1?'y':'ies'} verified${r.legacy?(' ('+r.legacy+' legacy pre-upgrade, unchained)'):''}.</div>`;
+    else host.innerHTML=`<div class="banner warn" style="background:var(--red-bg);border-color:#f3c7c7;color:var(--red)">✗ Audit chain broken at entry #${r.brokenAt} (${esc((r.entry&&r.entry.action)||'')}). The log may have been altered.</div>`;
+  }catch(e){ if(host)host.innerHTML=`<div class="banner warn">Could not verify: ${esc(e.message)}</div>`; }
 }
 /* settings (master data, integrations, storage) */
 async function settings(){
@@ -495,7 +588,15 @@ async function settings(){
       <div><span>Backup size</span><b>${backups&&backups.latest?esc(backups.latest.sizeKB+' KB'):'—'}</b></div>
       <div><span>Total dumps</span><b>${backups?esc(backups.count):'—'}</b></div>
       <div><span>Backups dir</span><b style="font-size:12px">${esc(backups?backups.dir:'?')}</b></div>
-    </div></div>`;
+    </div>
+    ${ME.role==='Administrator' && backups && backups.driver==='json' ? `<h3>Restore from backup</h3>
+      <div class="banner warn">Restoring replaces the entire live database with the selected snapshot. A safety backup of the current data is taken automatically first.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:680px"><select id="rs_name" style="flex:1 1 auto">${(backups.files||[]).filter(f=>/^db-\d{8}-\d{6}\.json$/.test(f.name)).map(f=>`<option value="${esc(f.name)}">${esc(f.name)} — ${esc(f.sizeKB)} KB, ${esc(f.ageHours)} h ago</option>`).join("")||'<option value="">No snapshots found</option>'}</select><button class="btn danger" onclick="doRestore()">Restore</button></div>` : '' }
+  </div>`;
+}
+async function doRestore(){ const name=val("rs_name"); if(!name){ toast("No backup selected"); return; }
+  if(!confirm("Restore '"+name+"'? This replaces ALL current data. A safety backup is taken first.")) return;
+  try{ const r=await api("/api/admin/restore",{method:"POST",body:{name}}); toast("Restored "+r.restored+" — "+r.jobs+" jobs, "+r.users+" users"); MD=await api("/api/masterdata"); go("dashboard"); }catch(e){ toast(e.message); }
 }
 /* my account */
 function myAccount(){
@@ -539,5 +640,10 @@ async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.tr
 async function bcTest(){ const no=$("#bcNo").value.trim(); const out=$("#bcOut"); out.textContent="Looking up…"; try{ const r=await api("/api/bc/job/"+encodeURIComponent(no)); out.textContent=JSON.stringify(r,null,2); }catch(e){ out.textContent=e.message; } }
 
 /* register SW + boot */
-if("serviceWorker" in navigator){ window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{})); }
+function showUpdateBanner(){ if(document.getElementById("updBanner"))return; const d=document.createElement("div"); d.id="updBanner"; d.className="upd-banner no-print"; d.innerHTML=`<span>A new version is available.</span><button class="btn gold sm" onclick="location.reload()">Reload</button>`; document.body.appendChild(d); }
+if("serviceWorker" in navigator){ window.addEventListener("load",()=>{
+  navigator.serviceWorker.register("sw.js").then(reg=>{ if(!reg)return;
+    reg.addEventListener("updatefound",()=>{ const nw=reg.installing; if(!nw)return; nw.addEventListener("statechange",()=>{ if(nw.state==="installed" && navigator.serviceWorker.controller) showUpdateBanner(); }); });
+  }).catch(()=>{});
+}); }
 boot();

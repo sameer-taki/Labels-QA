@@ -38,7 +38,14 @@ const STORAGE = makeStorage({
   sqlitePath: (CFG.storage && CFG.storage.path) ? path.resolve(ROOT, CFG.storage.path) : path.join(DATA_DIR, 'db.sqlite'),
   driverPref: (CFG.storage && CFG.storage.driver) || 'json'
 });
-async function loadDB() { const loaded = await STORAGE.load(); if (loaded) DB = loaded; else { DB = seedDB(); await STORAGE.save(DB); } }
+async function loadDB() {
+  const loaded = await STORAGE.load();
+  if (loaded) DB = loaded; else { DB = seedDB(); await STORAGE.save(DB); }
+  // forward-compat shims for databases created before these collections existed
+  if (!Array.isArray(DB.capas)) DB.capas = [];
+  if (!Array.isArray(DB.audit)) DB.audit = [];
+  if (typeof DB.auditAnchor !== 'string') DB.auditAnchor = '';
+}
 let _saveChain = Promise.resolve();
 function saveDB() { _saveChain = _saveChain.then(() => STORAGE.save(DB)).catch(e => console.error('saveDB failed:', e && e.message)); return _saveChain; }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toString('hex'); }
@@ -70,8 +77,15 @@ function seedDB() {
       tolerances: CFG.tolerances
     },
     jobs: adminPass ? [] : seedJobs(),
-    audit: [{ ts: new Date().toISOString(), user: 'system', action: 'seed', jobNo: '', detail: 'Database initialised' }]
+    capas: adminPass ? [] : seedCapas(),
+    audit: [ (function(){ const e={ ts:new Date().toISOString(), user:'system', action:'seed', jobNo:'', detail:'Database initialised' }; e.hash=auditHash('', e); return e; })() ],
+    auditAnchor: ''
   };
+}
+function seedCapas() {
+  return [ { id:'CAPA-24817-1', jobNo:'SK-24817', title:'Recurring hickeys on Station 1', source:'Reel Inspection (F-021)', severity:'Medium', status:'Open',
+    rootCause:'Worn anilox roller depositing debris during the run.', correctiveAction:'Swap the 360 anilox on Station 1 and re-run a 500 m verification reel.', preventiveAction:'Add an anilox-condition check to the weekly preventive-maintenance sheet.',
+    owner:'ateet', dueDate:'2026-06-30', createdBy:'akumar', createdAt:'2026-06-19T03:00:00.000Z', updatedAt:'2026-06-19T03:00:00.000Z', closedBy:'', closedAt:'' } ];
 }
 function seedJobs() {
   return [
@@ -100,11 +114,47 @@ function verifyTokenStr(tok){ if(!tok||typeof tok!=='string') return null; const
 function issueToken(u){ return signToken({ uid:u.id, name:u.name, role:u.role, exp:Date.now()+TOKEN_TTL_MS }); }
 function userByToken(req) { const t=(req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const p=verifyTokenStr(t); if(!p) return null; return DB.users.find(u=>u.id===p.uid) || { id:p.uid, name:p.name, role:p.role }; }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
-function audit(user, action, jobNo, detail) { DB.audit.push({ ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:jobNo||'', detail:detail||'' }); if (DB.audit.length>5000) DB.audit = DB.audit.slice(-5000); }
+/* Tamper-evident audit log: each entry is HMAC-chained to the previous one
+   (key = TOKEN_SECRET), so any later edit/insert/delete/reorder breaks the chain
+   and is caught by verifyAuditChain(). DB.auditAnchor keeps the hash of the last
+   pruned entry so the chain stays verifiable after the 5000-entry cap trims the head.
+   Strength depends on SECRET_KEY being secret (enforced in production). */
+function auditHash(prevHash, e){ return crypto.createHmac('sha256', TOKEN_SECRET).update(String(prevHash||'')+'|'+JSON.stringify([e.ts,e.user,e.action,e.jobNo,e.detail])).digest('hex'); }
+function audit(user, action, jobNo, detail) {
+  const prev = DB.audit.length ? (DB.audit[DB.audit.length-1].hash || '') : (DB.auditAnchor || '');
+  const e = { ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:jobNo||'', detail:detail||'' };
+  e.hash = auditHash(prev, e);
+  DB.audit.push(e);
+  if (DB.audit.length>5000){ const drop=DB.audit.length-5000; DB.auditAnchor = DB.audit[drop-1].hash || DB.auditAnchor || ''; DB.audit = DB.audit.slice(drop); }
+}
+function verifyAuditChain(){
+  let prev = DB.auditAnchor || ''; let checked=0, legacy=0;
+  for(let i=0;i<DB.audit.length;i++){ const e=DB.audit[i];
+    if(!e.hash){ legacy++; prev=''; continue; } // pre-upgrade entries: not chained
+    if(auditHash(prev, e) !== e.hash) return { ok:false, brokenAt:i, total:DB.audit.length, checked, legacy, entry:{ ts:e.ts, user:e.user, action:e.action, jobNo:e.jobNo } };
+    prev=e.hash; checked++;
+  }
+  return { ok:true, total:DB.audit.length, checked, legacy };
+}
 function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
 function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<4?'In Progress':'Released'); }
 function canManageUsers(u){ return !!u && (u.role==='Administrator' || u.role==='Quality Manager'); }
 function isManager(u){ return !!u && ['Supervisor','Quality Manager','Administrator'].includes(u.role); }
+
+const CAPA_SEVERITY = ['Low','Medium','High','Critical'];
+const CAPA_STATUS = ['Open','In Progress','Closed'];
+
+/* In-memory login throttle (keyed by username+IP). Resets on restart; the deployment
+   is single-writer, so a shared store isn't required. Tunable via config.security. */
+const SECCFG = CFG.security || {};
+const LOGIN_MAX_FAILS = Number(SECCFG.maxLoginFails) || 5;
+const LOGIN_WINDOW_MS = (Number(SECCFG.windowMin) || 15) * 60000;
+const LOGIN_LOCK_MS = (Number(SECCFG.lockMin) || 15) * 60000;
+const LOGIN_FAILS = new Map();
+function loginKeyOf(req, username){ const xf=String(req.headers['x-forwarded-for']||'').split(',')[0].trim(); const ip=xf||(req.socket&&req.socket.remoteAddress)||''; return username+'|'+ip; }
+function loginLockedSec(key){ const r=LOGIN_FAILS.get(key); if(r&&r.lockUntil&&Date.now()<r.lockUntil) return Math.ceil((r.lockUntil-Date.now())/1000); return 0; }
+function loginRecordFail(key){ const now=Date.now(); let r=LOGIN_FAILS.get(key); if(!r||now-r.first>LOGIN_WINDOW_MS) r={count:0,first:now,lockUntil:0}; r.count++; if(r.count>=LOGIN_MAX_FAILS) r.lockUntil=now+LOGIN_LOCK_MS; LOGIN_FAILS.set(key,r); return r; }
+function loginClear(key){ LOGIN_FAILS.delete(key); }
 
 /* Required fields enforced when a stage is marked complete (mirrored on the client). */
 const STAGE_REQUIRED = {
@@ -163,9 +213,17 @@ async function api(req, res, url) {
       }
       return send(res,401,{error:'No id_token supplied'});
     }
-    const u = DB.users.find(x=>x.id===String(b.username||'').trim().toLowerCase());
-    if (!u || !checkPw(u, String(b.password||''))) return send(res,401,{error:'Invalid username or password'});
-    audit(u,'login'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
+    const username = String(b.username||'').trim().toLowerCase();
+    const key = loginKeyOf(req, username);
+    const lock = loginLockedSec(key);
+    if (lock) return send(res,429,{error:'Too many failed attempts. Try again in about '+Math.ceil(lock/60)+' min.'}, { 'Retry-After':String(lock) });
+    const u = DB.users.find(x=>x.id===username);
+    if (!u || !checkPw(u, String(b.password||''))) {
+      const r = loginRecordFail(key);
+      audit(null,'login-fail','', username+(r.lockUntil?' — locked out':' (attempt '+r.count+')')); saveDB();
+      return send(res,401,{error:'Invalid username or password'});
+    }
+    loginClear(key); audit(u,'login'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
   }
   if (seg[0]==='config' && method==='GET') return send(res,200,{ orgName:CFG.orgName, sso:{ enabled:!!(CFG.sso&&CFG.sso.enabled), clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' } });
 
@@ -285,21 +343,72 @@ async function api(req, res, url) {
     if(!isManager(user)) return send(res,403,{error:'Not permitted'});
     const dir = process.env.BACKUP_DIR || path.join(DATA_DIR,'backups');
     try{
-      if(!fs.existsSync(dir)) return send(res,200,{ dir, count:0, latest:null });
+      if(!fs.existsSync(dir)) return send(res,200,{ dir, driver:STORAGE.driver, count:0, files:[], latest:null });
       const walk=(d)=>{ let out=[]; for(const e of fs.readdirSync(d,{withFileTypes:true})){ if(e.isSymbolicLink()) continue; const p=path.join(d,e.name); if(e.isDirectory()) out=out.concat(walk(p)); else out.push(p); } return out; };
       const files=walk(dir).filter(f=>/\.(sql|gz|json|dump)$/i.test(f)).map(f=>{ const s=fs.statSync(f); return { name:path.basename(f), size:s.size, mtime:s.mtimeMs }; }).sort((a,b)=>b.mtime-a.mtime);
       const l=files[0];
-      return send(res,200,{ dir, count:files.length, latest: l ? { name:l.name, sizeKB:Math.round(l.size/1024), ageHours:Math.round((Date.now()-l.mtime)/3600000) } : null });
+      const list=files.slice(0,40).map(f=>({ name:f.name, sizeKB:Math.round(f.size/1024), ageHours:Math.round((Date.now()-f.mtime)/3600000) }));
+      return send(res,200,{ dir, driver:STORAGE.driver, count:files.length, files:list, latest: l ? { name:l.name, sizeKB:Math.round(l.size/1024), ageHours:Math.round((Date.now()-l.mtime)/3600000) } : null });
     }catch(e){ return send(res,200,{ dir, error:String(e.message||e) }); }
   }
 
+  if (seg[0]==='admin' && seg[1]==='restore' && method==='POST') {
+    if(user.role!=='Administrator') return send(res,403,{error:'Only an Administrator can restore from a backup'});
+    if(STORAGE.driver!=='json') return send(res,400,{error:'Restore is available for JSON file storage only (current driver: '+STORAGE.driver+').'});
+    const b=await readBody(req); const name=String(b.name||'');
+    if(!/^db-\d{8}-\d{6}\.json$/.test(name)) return send(res,400,{error:'Invalid backup name'});
+    const dir = process.env.BACKUP_DIR || path.join(DATA_DIR,'backups');
+    const src = path.join(dir, name);
+    if(!fs.existsSync(src)) return send(res,404,{error:'Backup not found'});
+    let restored; try{ restored=JSON.parse(fs.readFileSync(src,'utf8')); }catch(e){ return send(res,400,{error:'Backup file is not valid JSON'}); }
+    if(!restored || !Array.isArray(restored.users) || !Array.isArray(restored.jobs)) return send(res,400,{error:'That file does not look like a Golden QA database'});
+    BACKUP.backupOnce({ dbFile: DB_FILE, backupDir: dir }); // safety snapshot of current state before overwriting
+    DB = restored;
+    if(!Array.isArray(DB.capas)) DB.capas=[]; if(!Array.isArray(DB.audit)) DB.audit=[]; if(typeof DB.auditAnchor!=='string') DB.auditAnchor='';
+    audit(user,'restore-backup','', name); await saveDB();
+    return send(res,200,{ ok:true, restored:name, users:DB.users.length, jobs:DB.jobs.length, capas:DB.capas.length });
+  }
+
+  if (seg[0]==='audit' && seg[1]==='verify' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, verifyAuditChain()); }
   if (seg[0]==='audit' && method==='GET') return send(res,200, DB.audit.slice(-300).reverse());
+
+  if (seg[0]==='capas' && method==='GET' && !seg[1]) {
+    let list = (DB.capas||[]).slice();
+    const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(c=>c.status===fs_);
+    const fj=url.searchParams.get('jobNo'); if(fj) list=list.filter(c=>String(c.jobNo||'').toLowerCase()===fj.toLowerCase());
+    return send(res,200, list.reverse());
+  }
+  if (seg[0]==='capas' && method==='POST' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can raise a CAPA'});
+    const b=await readBody(req);
+    if(!String(b.title||'').trim()) return send(res,400,{error:'A CAPA title is required'});
+    const now=new Date().toISOString();
+    const c={ id:'CAPA-'+Date.now().toString(36).toUpperCase(), jobNo:String(b.jobNo||'').trim(), title:String(b.title).trim(),
+      source:String(b.source||'').trim(), severity:CAPA_SEVERITY.includes(b.severity)?b.severity:'Medium', status:'Open',
+      rootCause:String(b.rootCause||''), correctiveAction:String(b.correctiveAction||''), preventiveAction:String(b.preventiveAction||''),
+      owner:String(b.owner||'').trim(), dueDate:String(b.dueDate||'').trim(), createdBy:user.id, createdAt:now, updatedAt:now, closedBy:'', closedAt:'' };
+    DB.capas.push(c); audit(user,'capa-open',c.jobNo,c.id+': '+c.title); saveDB(); return send(res,200,c);
+  }
+  if (seg[0]==='capas' && seg[1] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can update a CAPA'});
+    const c=(DB.capas||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!c) return send(res,404,{error:'CAPA not found'});
+    const b=await readBody(req);
+    ['title','source','rootCause','correctiveAction','preventiveAction','owner','dueDate'].forEach(k=>{ if(typeof b[k]==='string') c[k]=b[k]; });
+    if(b.severity && CAPA_SEVERITY.includes(b.severity)) c.severity=b.severity;
+    if(b.status && CAPA_STATUS.includes(b.status)){
+      const wasClosed=c.status==='Closed'; c.status=b.status;
+      if(c.status==='Closed' && !wasClosed){ c.closedBy=user.id; c.closedAt=new Date().toISOString(); }
+      if(c.status!=='Closed'){ c.closedBy=''; c.closedAt=''; }
+    }
+    c.updatedAt=new Date().toISOString();
+    audit(user, c.status==='Closed'?'capa-close':'capa-update', c.jobNo, c.id); saveDB(); return send(res,200,c);
+  }
 
   if (seg[0]==='bc' && seg[1]==='job' && method==='GET') { const r = await BC.lookupJob(CFG, decodeURIComponent(seg[2]||'')); return send(res, r.error?502:200, r); }
 
   if (seg[0]==='avt-import' && method==='POST') { const b=await readBody(req); const r=AVT.parse(b.csv||''); return send(res,200,r); }
 
-  if (seg[0]==='analytics' && method==='GET') return send(res,200, analytics());
+  if (seg[0]==='analytics' && method==='GET') return send(res,200, analytics({ from:url.searchParams.get('from')||'', to:url.searchParams.get('to')||'', shift:url.searchParams.get('shift')||'' }));
 
   if (seg[0]==='digest' && method==='GET' && !seg[1]) return send(res,200, buildDigest());
   if (seg[0]==='digest' && seg[1]==='send' && method==='POST') {
@@ -333,18 +442,26 @@ function pubUser(u){ return { id:u.id, name:u.name, role:u.role }; }
 function ssoUser(email, name){ const id=String(email).split('@')[0].toLowerCase(); return DB.users.find(u=>u.id===id) || { id, name:name||email.split('@')[0], role:'QA Officer' }; }
 function verifySso(email){ if(!email) return null; const dom='@'+CFG.sso.allowedDomain; if(!String(email).toLowerCase().endsWith(dom)) return null; return ssoUser(email); }
 
-function analytics(){
-  const defects={}, wasteByMachine={}, downtime={Setup:0,Material:0,Windup:0,Damage:0,Mechanical:0,Electrical:0,Others:0};
-  let released=0, total=DB.jobs.length, rejectedJobs=0;
-  DB.jobs.forEach(j=>{
-    if(jobStatus(j)==='Released') released++;
+function analytics(opts){
+  opts=opts||{}; const from=opts.from||'', to=opts.to||'', shift=String(opts.shift||'');
+  const inRange=j=>{ const d=j.created||''; if(from && d<from) return false; if(to && d>to) return false; return true; };
+  const inShift=j=>{ if(!shift) return true; return [j.stage2&&j.stage2.shift, j.stage4&&j.stage4.shift].some(s=>String(s||'').toLowerCase()===shift.toLowerCase()); };
+  const jobs=DB.jobs.filter(j=>inRange(j)&&inShift(j));
+  const defects={}, wasteByMachine={}, downtime={Setup:0,Material:0,Windup:0,Damage:0,Mechanical:0,Electrical:0,Others:0}, trendMap={};
+  let released=0, total=jobs.length, rejectedJobs=0;
+  jobs.forEach(j=>{
+    const st=jobStatus(j);
+    if(st==='Released') released++;
     const s2=j.stage2||{}; (s2.rows||[]).forEach(r=>{ if(r.defect){ defects[r.defect]=(defects[r.defect]||0)+(parseFloat(r.weightKg)||0.0); } });
     const s3=j.stage3||{}; const w=(s3.rolls||[]).reduce((a,r)=>a+(parseFloat(r.wasteKg)||0),0); wasteByMachine[j.machine]=(wasteByMachine[j.machine]||0)+w;
-    if(s3){ downtime.Setup+=parseFloat(s3.setupHours)||0; downtime.Material+=parseFloat(s3.dtMaterial)||0; downtime.Windup+=parseFloat(s3.dtWindup)||0; downtime.Damage+=parseFloat(s3.dtDamage)||0; downtime.Mechanical+=parseFloat(s3.dtMechanical)||0; downtime.Electrical+=parseFloat(s3.dtElectrical)||0; downtime.Others+=parseFloat(s3.dtOthers)||0; }
+    downtime.Setup+=parseFloat(s3.setupHours)||0; downtime.Material+=parseFloat(s3.dtMaterial)||0; downtime.Windup+=parseFloat(s3.dtWindup)||0; downtime.Damage+=parseFloat(s3.dtDamage)||0; downtime.Mechanical+=parseFloat(s3.dtMechanical)||0; downtime.Electrical+=parseFloat(s3.dtElectrical)||0; downtime.Others+=parseFloat(s3.dtOthers)||0;
     const s4=j.stage4||{}; if(s4.statusFinal && s4.statusFinal!=='Released') rejectedJobs++;
+    const day=j.created||'unknown'; const t=trendMap[day]||(trendMap[day]={date:day,jobs:0,released:0,held:0}); t.jobs++; if(st==='Released')t.released++; if(st==='Hold'||st==='Rejected')t.held++;
   });
   const fpy = total? Math.round((released/total)*100):0;
-  return { defects, wasteByMachine, downtime, kpis:{ total, released, rejectedJobs, firstPassYield:fpy } };
+  const trend = Object.values(trendMap).sort((a,b)=> a.date<b.date?-1:1);
+  const openCapas = (DB.capas||[]).filter(c=>c.status!=='Closed').length;
+  return { defects, wasteByMachine, downtime, trend, range:{from,to,shift}, kpis:{ total, released, rejectedJobs, firstPassYield:fpy, openCapas } };
 }
 
 /* ---------- manager digest (emailed / Teams) ---------- */

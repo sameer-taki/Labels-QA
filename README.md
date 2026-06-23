@@ -99,6 +99,7 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 ## 7. Production hardening checklist
 
 - [ ] Change all default **passwords** (Admin > Users / edit `seedDB`), set strong manager passwords.
+- [x] **Login brute-force lockout** is built in (`config.json` → `security`): repeated wrong attempts per username+IP lock that login for a cool-off window.
 - [ ] Put the server behind **HTTPS** (reverse proxy: IIS/ARR, nginx, or Caddy) so the camera
       and PWA install work reliably and credentials are encrypted.
 - [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
@@ -115,12 +116,14 @@ Tablet-first PWA (installable, offline + sync) · username/password + Microsoft 
 machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
-Pareto, waste, downtime, first-pass yield) · Business Central + AVT import · hold/reject alerts ·
-immutable audit trail · admin master-data editor · **user management** (add/edit, password reset) ·
+Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · Business Central + AVT
+import · hold/reject alerts · **CAPA** corrective/preventive-action tracking · **tamper-evident
+(HMAC-chained) audit trail** with one-click integrity check · admin master-data editor ·
+**user management** (add/edit, password reset) · **login brute-force lockout** ·
 **stage-in-sequence enforcement** · **required-field validation** · **dashboard search/filter** ·
-**CSV export** · **manager e-mail/Teams digest** · **automatic rotating backups** · optional
-**SQLite** storage · real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
-**deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
+**CSV export** · **manager e-mail/Teams digest** · **automatic rotating backups** + admin
+**restore** · optional **SQLite** storage · real **Microsoft Entra ID** SSO · smoke tests
+(`npm test`) · on-prem **deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ---
 
