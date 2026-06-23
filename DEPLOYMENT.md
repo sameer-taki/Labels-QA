@@ -373,7 +373,7 @@ Confirm before handing to production — see the full list in **README §7**:
 - [ ] Firewall rule applied (§4).
 - [ ] Daily `data/` backup scheduled and copied off-box; a restore has been tested (§8).
 - [ ] Health check monitored (§10).
-- [ ] SSO / Business Central / notify settings confirmed in `config.json` (README §4–5).
+- [ ] SSO / notify settings confirmed in `config.json` (README §4–5).
 
 ---
 

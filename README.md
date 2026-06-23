@@ -67,7 +67,6 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 | `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
 | `storage` | `driver:"json"` (default, `data/db.json`) or `"sqlite"` (built-in `node:sqlite`, Node 22.5+; falls back to JSON if unavailable) |
 | `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
-| `businessCentral` | Set `enabled:true` and confirm `jobService` (the published OData web service holding the print Job# + item). The server queries `bc-test.gml.com.fj` directly — run it on a host that can reach BC |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
 | `tolerances` | COF range, registration max, barcode min grade — drive the auto pass/fail flags (also editable in Admin) |
 
@@ -75,9 +74,6 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 
 ## 5. Integrations
 
-- **Business Central**: `integrations/businessCentral.js` queries BC14 OData V4 by Job #.
-  Until enabled it returns sample data so the UI works. Confirm the exact service name with
-  your BC admin and set `businessCentral.enabled=true`.
 - **AVT reel report**: Stage 2 → *Import AVT report (CSV)*. Expected headers (any order):
   `Roll, TotalMeters, WasteIn, WasteOut, Defect, WeightKg`.
 - **Alerts**: hold/reject events call `integrations/notify.js` (Teams webhook now; SMTP email
@@ -105,7 +101,6 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 - [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
 - [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart — see [DEPLOYMENT.md](DEPLOYMENT.md) and [`deploy/install-windows-service.ps1`](deploy/install-windows-service.ps1).
 - [x] **Automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Optional **SQLite** storage via `storage.driver` (Node 22.5+). Still back up `data/uploads/`; move to **PostgreSQL** for high concurrency.
-- [ ] Confirm the **Business Central** web service and enable it.
 - [ ] Set the **SQF document-retention** period and confirm with your auditor.
 
 ---
@@ -116,7 +111,7 @@ Tablet-first PWA (installable, offline + sync) · username/password + Microsoft 
 machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
-Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · Business Central + AVT
+Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · **AVT** reel-report
 import · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
 effectiveness check) · **NCR** non-conformance reports (promote to CAPA) · **equipment &
 calibration register** (due/overdue tracking) · **SPC** control charts (Cp/Cpk) · **supplier

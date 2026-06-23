@@ -13,7 +13,6 @@ const UP_DIR = path.join(DATA_DIR, 'uploads');
 const PUB = path.join(ROOT, 'public');
 fs.mkdirSync(UP_DIR, { recursive: true });
 
-const BC = require('./integrations/businessCentral');
 const NOTIFY = require('./integrations/notify');
 const AVT = require('./integrations/avtImport');
 const EMAIL = require('./integrations/email');
@@ -573,8 +572,6 @@ async function api(req, res, url) {
   }
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
-
-  if (seg[0]==='bc' && seg[1]==='job' && method==='GET') { const r = await BC.lookupJob(CFG, decodeURIComponent(seg[2]||'')); return send(res, r.error?502:200, r); }
 
   if (seg[0]==='avt-import' && method==='POST') { const b=await readBody(req); const r=AVT.parse(b.csv||''); return send(res,200,r); }
 

@@ -9,13 +9,6 @@
     "allowedDomain": "golden.com.fj",
     "note": "Leave tenantId/clientId blank for the demo e-mail sign-in. Fill BOTH with your Entra App registration GUIDs to require real Microsoft Entra ID id_token validation (see deploy/ENTRA-SSO-SETUP.md)."
   },
-  "businessCentral": {
-    "enabled": false,
-    "baseUrl": "http://bc-test.gml.com.fj:7048/BC140/ODataV4",
-    "company": "Golden Manufacturers Pte Ltd",
-    "jobService": "QAJobCard",
-    "note": "Set enabled=true and confirm the published OData service that holds the print Job# + item. Adapter runs server-side (on-prem server can reach BC)."
-  },
   "notify": {
     "teamsWebhookUrl": "",
     "email": {
