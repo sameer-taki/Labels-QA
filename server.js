@@ -19,6 +19,7 @@ const AVT = require('./integrations/avtImport');
 const EMAIL = require('./integrations/email');
 const ENTRA = require('./integrations/entraId');
 const BACKUP = require('./integrations/backup');
+const WEBHOOKS = require('./integrations/webhooks');
 const { makeStorage } = require('./integrations/storage');
 
 /* ---------- runtime config (env overrides config.json for container deploys) ---------- */
@@ -44,6 +45,8 @@ async function loadDB() {
   // forward-compat shims for databases created before these collections existed
   if (!Array.isArray(DB.capas)) DB.capas = [];
   if (!Array.isArray(DB.equipment)) DB.equipment = [];
+  if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
+  if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
   if (!Array.isArray(DB.audit)) DB.audit = [];
   if (typeof DB.auditAnchor !== 'string') DB.auditAnchor = '';
   if (!DB.masterdata) DB.masterdata = {};
@@ -83,6 +86,8 @@ function seedDB() {
     jobs: adminPass ? [] : seedJobs(),
     capas: adminPass ? [] : seedCapas(),
     equipment: adminPass ? [] : seedEquipment(),
+    apikeys: [],
+    webhooks: [],
     audit: [ (function(){ const e={ ts:new Date().toISOString(), user:'system', action:'seed', jobNo:'', detail:'Database initialised' }; e.hash=auditHash('', e); return e; })() ],
     auditAnchor: ''
   };
@@ -129,6 +134,14 @@ function verifyTokenStr(tok){ if(!tok||typeof tok!=='string') return null; const
 function issueToken(u){ return signToken({ uid:u.id, name:u.name, role:u.role, exp:Date.now()+TOKEN_TTL_MS }); }
 function userByToken(req) { const t=(req.headers['authorization']||'').replace(/^Bearer /,'') || req.headers['x-token']; const p=verifyTokenStr(t); if(!p) return null; return DB.users.find(u=>u.id===p.uid) || { id:p.uid, name:p.name, role:p.role }; }
 function alertAll(title, text){ try{ NOTIFY.alert(CFG, title, text); }catch(e){} EMAIL.send(CFG, { subject:title, text:text }).then(r=>{ if(r && !r.ok && r.error!=='email disabled') console.log('EMAIL send:', r.error); }).catch(()=>{}); }
+/* API-key auth (read-only). Keys are stored hashed; the plaintext is shown once at creation. */
+function hashKey(k){ return crypto.createHash('sha256').update(String(k)).digest('hex'); }
+function apiKeyUser(req){ const k=req.headers['x-api-key']; if(!k) return null; const rec=(DB.apikeys||[]).find(a=>a.active!==false && a.keyHash===hashKey(k)); if(!rec) return null; rec.lastUsed=new Date().toISOString(); return { id:'apikey:'+rec.id, name:rec.name+' (API key)', role:'QA Officer', _apikey:rec.id }; }
+/* Fire an outbound event to every subscribed, active webhook (fire-and-forget). */
+function fireEvent(event, payload){
+  const hooks=(DB.webhooks||[]).filter(h=>h.active!==false && (!Array.isArray(h.events) || !h.events.length || h.events.includes(event)));
+  hooks.forEach(h=>{ WEBHOOKS.dispatch(h, event, payload).then(r=>{ h.lastStatus=r.ok?('ok '+(r.status||'')):('fail '+(r.error||r.status||'')); h.lastAt=new Date().toISOString(); }).catch(()=>{}); });
+}
 /* Tamper-evident audit log: each entry is HMAC-chained to the previous one
    (key = TOKEN_SECRET), so any later edit/insert/delete/reorder breaks the chain
    and is caught by verifyAuditChain(). DB.auditAnchor keeps the hash of the last
@@ -160,6 +173,7 @@ const CAPA_SEVERITY = ['Low','Medium','High','Critical'];
 const CAPA_STATUS = ['Open','In Progress','Closed'];
 const EQUIP_TYPES = ['Machine','Anilox','Gauge','Verifier','Scale','Other'];
 const CAL_DUE_SOON_DAYS = Number((CFG.quality && CFG.quality.calDueSoonDays)) || 14;
+const WEBHOOK_EVENTS = ['job.released','job.hold','capa.opened','capa.closed','equipment.calibrated'];
 
 /* date helpers (UTC, YYYY-MM-DD) */
 function ymd(d){ return d.toISOString().slice(0,10); }
@@ -259,8 +273,10 @@ async function api(req, res, url) {
   }
   if (seg[0]==='config' && method==='GET') return send(res,200,{ orgName:CFG.orgName, sso:{ enabled:!!(CFG.sso&&CFG.sso.enabled), clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' } });
 
-  const user = userByToken(req);
+  let user = userByToken(req); let viaApiKey = false;
+  if (!user) { const k = apiKeyUser(req); if (k) { user = k; viaApiKey = true; } }
   if (!user) return send(res,401,{error:'Not authenticated'});
+  if (viaApiKey && method !== 'GET') return send(res,403,{error:'API keys are read-only'});
 
   if (seg[0]==='me' && seg[1]==='password' && method==='POST') {
     const dbu = DB.users.find(u=>u.id===user.id);
@@ -322,13 +338,13 @@ async function api(req, res, url) {
       if(miss.length) return send(res,400,{error:'Cannot mark complete — missing: '+miss.join(', '), missing:miss});
     }
     j['stage'+n] = b.data || {};
-    if(n==='4' && b.data && b.data._done && b.data.statusFinal){ j.statusOverride = b.data.statusFinal==='Released'?'Released':'Hold'; if(j.statusOverride!=='Released'){ alertAll('Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+b.data.statusFinal+' (qty '+(b.data.rejectedQty||'?')+')'); } }
+    if(n==='4' && b.data && b.data._done && b.data.statusFinal){ j.statusOverride = b.data.statusFinal==='Released'?'Released':'Hold'; if(j.statusOverride!=='Released'){ alertAll('Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+b.data.statusFinal+' (qty '+(b.data.rejectedQty||'?')+')'); } fireEvent(j.statusOverride==='Released'?'job.released':'job.hold',{ jobNo:j.jobNo, product:j.product, decision:b.data.statusFinal }); }
     audit(user,'save-stage'+n,j.jobNo, b.data&&b.data._done?'completed':'draft'); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[2]==='hold' && method==='POST') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'}); const b=await readBody(req);
-    j.statusOverride='Hold'; audit(user,'hold',j.jobNo,b.reason||''); alertAll('Job '+j.jobNo+' placed on HOLD', (b.reason||'')+' by '+user.name); saveDB(); return send(res,200,j);
+    j.statusOverride='Hold'; audit(user,'hold',j.jobNo,b.reason||''); alertAll('Job '+j.jobNo+' placed on HOLD', (b.reason||'')+' by '+user.name); fireEvent('job.hold',{ jobNo:j.jobNo, reason:b.reason||'', by:user.id }); saveDB(); return send(res,200,j);
   }
 
   if (seg[0]==='upload' && method==='POST') { // {dataUrl, name}
@@ -401,6 +417,34 @@ async function api(req, res, url) {
     return send(res,200,{ ok:true, restored:name, users:DB.users.length, jobs:DB.jobs.length, capas:DB.capas.length });
   }
 
+  if (seg[0]==='admin' && seg[1]==='apikeys') {
+    if(user.role!=='Administrator') return send(res,403,{error:'Only an Administrator can manage API keys'});
+    if(method==='GET') return send(res,200, (DB.apikeys||[]).map(a=>({ id:a.id, name:a.name, prefix:a.prefix, scopes:a.scopes, active:a.active!==false, createdBy:a.createdBy, createdAt:a.createdAt, lastUsed:a.lastUsed||'' })));
+    if(method==='POST'){
+      const b=await readBody(req); const name=String(b.name||'').trim(); if(!name) return send(res,400,{error:'A key name is required'});
+      const prefix=crypto.randomBytes(3).toString('hex'); const fullKey='gqa_'+prefix+'_'+crypto.randomBytes(24).toString('base64url');
+      const rec={ id:'AK-'+Date.now().toString(36).toUpperCase(), name, prefix, keyHash:hashKey(fullKey), scopes:['read'], active:true, createdBy:user.id, createdAt:new Date().toISOString(), lastUsed:'' };
+      DB.apikeys.push(rec); audit(user,'apikey-create','',rec.id+': '+name); saveDB();
+      return send(res,200,{ ok:true, id:rec.id, name, key:fullKey }); // plaintext shown once, never stored
+    }
+    if(seg[2] && method==='DELETE'){ const i=(DB.apikeys||[]).findIndex(a=>a.id===decodeURIComponent(seg[2])); if(i<0) return send(res,404,{error:'API key not found'}); const rem=DB.apikeys.splice(i,1)[0]; audit(user,'apikey-revoke','',rem.id); saveDB(); return send(res,200,{ ok:true }); }
+    return send(res,405,{error:'Method not allowed'});
+  }
+  if (seg[0]==='admin' && seg[1]==='webhooks') {
+    if(user.role!=='Administrator') return send(res,403,{error:'Only an Administrator can manage webhooks'});
+    if(method==='GET') return send(res,200, { events:WEBHOOK_EVENTS, hooks:(DB.webhooks||[]).map(h=>({ id:h.id, url:h.url, events:h.events||[], active:h.active!==false, hasSecret:!!h.secret, lastStatus:h.lastStatus||'', lastAt:h.lastAt||'', createdAt:h.createdAt })) });
+    if(method==='POST'){
+      const b=await readBody(req); const u=String(b.url||'').trim();
+      if(!/^https?:\/\//i.test(u)) return send(res,400,{error:'A valid http(s) URL is required'});
+      const events=Array.isArray(b.events)?b.events.filter(e=>WEBHOOK_EVENTS.includes(e)):[];
+      const rec={ id:'WH-'+Date.now().toString(36).toUpperCase(), url:u, events, secret:String(b.secret||''), active:true, createdBy:user.id, createdAt:new Date().toISOString(), lastStatus:'', lastAt:'' };
+      DB.webhooks.push(rec); audit(user,'webhook-create','',rec.id+': '+u); saveDB();
+      return send(res,200,{ ok:true, id:rec.id });
+    }
+    if(seg[2] && method==='DELETE'){ const i=(DB.webhooks||[]).findIndex(h=>h.id===decodeURIComponent(seg[2])); if(i<0) return send(res,404,{error:'Webhook not found'}); const rem=DB.webhooks.splice(i,1)[0]; audit(user,'webhook-delete','',rem.id); saveDB(); return send(res,200,{ ok:true }); }
+    return send(res,405,{error:'Method not allowed'});
+  }
+
   if (seg[0]==='audit' && seg[1]==='verify' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, verifyAuditChain()); }
   if (seg[0]==='audit' && method==='GET') return send(res,200, DB.audit.slice(-300).reverse());
 
@@ -419,7 +463,7 @@ async function api(req, res, url) {
       source:String(b.source||'').trim(), severity:CAPA_SEVERITY.includes(b.severity)?b.severity:'Medium', status:'Open',
       rootCause:String(b.rootCause||''), correctiveAction:String(b.correctiveAction||''), preventiveAction:String(b.preventiveAction||''),
       owner:String(b.owner||'').trim(), dueDate:String(b.dueDate||'').trim(), createdBy:user.id, createdAt:now, updatedAt:now, closedBy:'', closedAt:'' };
-    DB.capas.push(c); audit(user,'capa-open',c.jobNo,c.id+': '+c.title); saveDB(); return send(res,200,c);
+    DB.capas.push(c); audit(user,'capa-open',c.jobNo,c.id+': '+c.title); fireEvent('capa.opened',{ id:c.id, jobNo:c.jobNo, title:c.title, severity:c.severity }); saveDB(); return send(res,200,c);
   }
   if (seg[0]==='capas' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can update a CAPA'});
@@ -429,7 +473,7 @@ async function api(req, res, url) {
     if(b.severity && CAPA_SEVERITY.includes(b.severity)) c.severity=b.severity;
     if(b.status && CAPA_STATUS.includes(b.status)){
       const wasClosed=c.status==='Closed'; c.status=b.status;
-      if(c.status==='Closed' && !wasClosed){ c.closedBy=user.id; c.closedAt=new Date().toISOString(); }
+      if(c.status==='Closed' && !wasClosed){ c.closedBy=user.id; c.closedAt=new Date().toISOString(); fireEvent('capa.closed',{ id:c.id, jobNo:c.jobNo }); }
       if(c.status!=='Closed'){ c.closedBy=''; c.closedAt=''; }
     }
     c.updatedAt=new Date().toISOString();
@@ -462,7 +506,7 @@ async function api(req, res, url) {
     e.calibratedOn=on; e.active=true;
     e.history=e.history||[]; e.history.push({ on, by:user.id, result:String(b.result||'Pass'), notes:String(b.notes||'') });
     e.updatedAt=new Date().toISOString();
-    audit(user,'equip-calibrate','',e.id+' on '+on); saveDB(); return send(res,200,equipView(e));
+    audit(user,'equip-calibrate','',e.id+' on '+on); fireEvent('equipment.calibrated',{ id:e.id, on, result:String(b.result||'Pass') }); saveDB(); return send(res,200,equipView(e));
   }
   if (seg[0]==='equipment' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
@@ -562,6 +606,26 @@ function exec(){
     lists:{ overdueCapas, overdueCal, dueSoonCal, holds } };
 }
 
+/* Prometheus exposition format (text/plain; version=0.0.4). */
+function metricsText(){
+  const a=analytics(); const today=ymd(new Date());
+  const eq=(DB.equipment||[]).filter(x=>x.active!==false).map(equipView);
+  const overdueCal=eq.filter(x=>x.calStatus==='Overdue').length;
+  const openCapas=(DB.capas||[]).filter(c=>c.status!=='Closed'); const overdueCapas=openCapas.filter(c=>c.dueDate&&c.dueDate<today).length;
+  const out=[]; const add=(name,help,type,val)=>{ out.push('# HELP '+name+' '+help, '# TYPE '+name+' '+type, name+' '+val); };
+  add('gqa_jobs_total','Total jobs','gauge',a.kpis.total);
+  add('gqa_jobs_released','Released jobs','gauge',a.kpis.released);
+  add('gqa_jobs_hold_reject','Jobs on hold or rejected','gauge',a.kpis.rejectedJobs);
+  add('gqa_first_pass_yield_percent','First-pass yield (percent)','gauge',a.kpis.firstPassYield);
+  add('gqa_open_capas','Open CAPAs','gauge',openCapas.length);
+  add('gqa_overdue_capas','Overdue CAPAs','gauge',overdueCapas);
+  add('gqa_equipment_total','Active equipment items','gauge',eq.length);
+  add('gqa_overdue_calibrations','Overdue calibrations','gauge',overdueCal);
+  add('gqa_users_total','User accounts','gauge',(DB.users||[]).length);
+  add('gqa_uptime_seconds','Process uptime in seconds','counter',Math.round(process.uptime()));
+  return out.join('\n')+'\n';
+}
+
 /* ---------- manager digest (emailed / Teams) ---------- */
 function buildDigest(){
   const a=analytics(); const today=ymd(new Date());
@@ -597,6 +661,12 @@ function digestHtml(d){
 /* ---------- HTTP server ---------- */
 const server = http.createServer((req,res)=>{
   const url = new URL(req.url, 'http://x');
+  if (url.pathname==='/metrics') { // Prometheus scrape; optional METRICS_TOKEN (Bearer or ?token=)
+    if(!DB) return send(res,503,'not ready\n');
+    const tok=process.env.METRICS_TOKEN;
+    if(tok){ const a=(req.headers['authorization']||'').replace(/^Bearer /,'')||url.searchParams.get('token')||''; if(a!==tok) return send(res,401,'unauthorized\n'); }
+    res.writeHead(200,{ 'Content-Type':'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control':'no-store' }); return res.end(metricsText());
+  }
   if (url.pathname.startsWith('/api/')) return api(req,res,url).catch(e=>{ console.error(e); send(res,500,{error:String(e)}); });
   if (url.pathname.startsWith('/uploads/')) return serveStatic(res, path.join(UP_DIR, path.basename(url.pathname)));
   let p = url.pathname === '/' ? '/index.html' : url.pathname;

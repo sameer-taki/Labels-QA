@@ -27,12 +27,13 @@ function eq(name, actual, expected) {
 }
 
 /* ---------- tiny http client (built-in only) ---------- */
-function request(method, p, body, token) {
+function request(method, p, body, token, apiKey) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
     const headers = {};
     if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = data.length; }
     if (token) headers['x-token'] = token;
+    if (apiKey) headers['x-api-key'] = apiKey;
     const req = http.request({ host: HOST, port: PORT, method, path: p, headers, timeout: 8000 }, (res) => {
       let buf = '';
       res.setEncoding('utf8');
@@ -335,6 +336,41 @@ async function main() {
       JSON.stringify(r.body && r.body.kpis && r.body.kpis.map((k) => k.key + ':' + k.rag)));
     r = await request('GET', '/api/exec', undefined, officerToken);
     eq('non-manager GET /api/exec -> 403', r.status, 403);
+
+    // 22. API keys (read-only)
+    r = await request('POST', '/api/admin/apikeys', { name: 'Smoke key ' + PID }, adminToken);
+    eq('POST /api/admin/apikeys -> 200', r.status, 200);
+    const apiKey = r.body && r.body.key, keyId = r.body && r.body.id;
+    ok('API key returned once with gqa_ prefix', !!(apiKey && /^gqa_/.test(apiKey)), JSON.stringify(r.body && Object.keys(r.body)));
+
+    r = await request('GET', '/api/jobs', undefined, undefined, apiKey);
+    eq('API key GET /api/jobs -> 200', r.status, 200);
+    r = await request('POST', '/api/capas', { title: 'viakey' }, undefined, apiKey);
+    eq('API key write -> 403 (read-only)', r.status, 403);
+    r = await request('GET', '/api/exec', undefined, undefined, apiKey);
+    eq('API key on manager-only /exec -> 403', r.status, 403);
+    r = await request('DELETE', '/api/admin/apikeys/' + encodeURIComponent(keyId), undefined, adminToken);
+    eq('revoke API key -> 200', r.status, 200);
+    r = await request('GET', '/api/jobs', undefined, undefined, apiKey);
+    eq('revoked API key -> 401', r.status, 401);
+    r = await request('POST', '/api/admin/apikeys', { name: 'x' }, officerToken);
+    eq('non-admin POST /api/admin/apikeys -> 403', r.status, 403);
+
+    // 23. webhooks
+    r = await request('POST', '/api/admin/webhooks', { url: 'http://127.0.0.1:9/none', events: ['job.released'] }, adminToken);
+    eq('POST /api/admin/webhooks -> 200', r.status, 200);
+    const hookId = r.body && r.body.id;
+    r = await request('POST', '/api/admin/webhooks', { url: 'not-a-url' }, adminToken);
+    eq('webhook bad url -> 400', r.status, 400);
+    r = await request('GET', '/api/admin/webhooks', undefined, adminToken);
+    ok('webhook list returns events[] + hooks[]', !!(r.body && Array.isArray(r.body.events) && Array.isArray(r.body.hooks)), JSON.stringify(r.body && Object.keys(r.body)));
+    r = await request('DELETE', '/api/admin/webhooks/' + encodeURIComponent(hookId), undefined, adminToken);
+    eq('delete webhook -> 200', r.status, 200);
+
+    // 24. Prometheus metrics
+    r = await request('GET', '/metrics');
+    eq('GET /metrics -> 200', r.status, 200);
+    ok('/metrics exposes gqa_ gauges', typeof r.raw === 'string' && r.raw.indexOf('gqa_jobs_total') >= 0, (r.raw || '').slice(0, 40));
 
   } catch (e) {
     failed++;

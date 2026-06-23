@@ -16,6 +16,7 @@ const NAV = [
   { group:"Settings", items:[
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
     {v:"audit",label:"Audit Trail",icon:"audit",mgr:true},
+    {v:"integrations",label:"Integrations",icon:"plug",mgr:true},
     {v:"settings",label:"Settings",icon:"gear",mgr:true},
     {v:"account",label:"My Account",icon:"user"}
   ]}
@@ -32,7 +33,8 @@ const ICONS = {
   user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
   capa:"M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-5 9 2 2 4-4",
   exec:"M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 12l3.5-2.2",
-  equip:"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+  equip:"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
+  plug:"M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 3.9M15.4 6.6 8.6 10.5"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -166,7 +168,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="equip")equipmentPage(); else if(v==="reports")reports(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -635,6 +637,44 @@ async function execDashboard(){
       ${listCard('Jobs on hold / rejected', d.lists.holds, h=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(h.jobNo)}'})">${esc(h.jobNo)}</button> ${statusPill(h.status)} ${esc(h.product||'')}</div>`, 'No jobs on hold or rejected.')}
     </div>`;
 }
+
+/* integrations: API keys, webhooks, metrics (Administrator) */
+async function integrationsPage(){
+  if(ME.role!=='Administrator'){ app().innerHTML=`<div class="card"><h2>Integrations</h2><p class="sub">Only an Administrator can manage API keys and webhooks.</p></div>`; return; }
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let keys=[], wh={events:[],hooks:[]};
+  try{ keys=await api("/api/admin/apikeys"); }catch(e){}
+  try{ wh=await api("/api/admin/webhooks"); }catch(e){}
+  window._wh=wh; const base=location.origin;
+  const keyRows=keys.map(k=>`<tr><td><b>${esc(k.name)}</b></td><td><code>gqa_${esc(k.prefix)}_…</code></td><td>${esc((k.scopes||[]).join(', '))}</td><td>${esc(k.lastUsed?k.lastUsed.replace('T',' ').slice(0,16):'never')}</td><td class="no-print"><button class="btn danger sm" onclick="revokeKey('${jsq(k.id)}')">Revoke</button></td></tr>`).join("");
+  const hookRows=(wh.hooks||[]).map(h=>`<tr><td style="word-break:break-all">${esc(h.url)}</td><td>${esc((h.events&&h.events.length)?h.events.join(', '):'all')}</td><td>${esc(h.lastStatus||'—')}</td><td class="no-print"><button class="btn danger sm" onclick="delHook('${jsq(h.id)}')">Delete</button></td></tr>`).join("");
+  app().innerHTML=`<div class="card"><h2>Integrations</h2><p class="sub">Read-only REST API keys, outbound webhooks, and metrics for BI / monitoring.</p>
+    <h3>API keys <button class="btn gold sm no-print" style="margin-left:8px" onclick="createKey()">+ New key</button></h3>
+    <p class="sub">Send as header <code>x-api-key: gqa_…</code> on GET endpoints. Keys are read-only and scoped to operational data.</p>
+    <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Key</th><th>Scopes</th><th>Last used</th><th class="no-print"></th></tr></thead><tbody>${keyRows||`<tr><td colspan="5" style="color:var(--muted)">No keys yet.</td></tr>`}</tbody></table></div>
+    <h3>Webhooks <button class="btn gold sm no-print" style="margin-left:8px" onclick="addHook()">+ Add webhook</button></h3>
+    <p class="sub">POST signed JSON (HMAC-SHA256 in <code>X-GQA-Signature</code>) on: ${esc((wh.events||[]).join(', '))||'—'}.</p>
+    <div style="overflow-x:auto"><table><thead><tr><th>URL</th><th>Events</th><th>Last delivery</th><th class="no-print"></th></tr></thead><tbody>${hookRows||`<tr><td colspan="4" style="color:var(--muted)">No webhooks yet.</td></tr>`}</tbody></table></div>
+    <h3>Metrics &amp; API</h3><p class="sub">Prometheus metrics at <code>${esc(base)}/metrics</code> (set <code>METRICS_TOKEN</code> to require a bearer token).</p>
+    <pre style="background:#f4f7fb;padding:10px;border-radius:8px;font-size:12px;overflow-x:auto">curl -H "x-api-key: gqa_…" ${esc(base)}/api/jobs
+curl -H "x-api-key: gqa_…" ${esc(base)}/api/analytics</pre></div>`;
+}
+async function createKey(){ const name=prompt("Name this API key (e.g. 'Power BI reader'):"); if(!name)return;
+  try{ const r=await api("/api/admin/apikeys",{method:"POST",body:{name}});
+    $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>API key created</h2><div class="banner warn">Copy this key now — it is shown only once and cannot be retrieved later.</div><pre style="background:#f4f7fb;padding:12px;border-radius:8px;font-size:13px;word-break:break-all;white-space:pre-wrap">${esc(r.key)}</pre><div class="row-actions"><button class="btn gold" onclick="closeModal();integrationsPage()">Done</button></div></div></div>`;
+  }catch(e){ toast(e.message); } }
+async function revokeKey(id){ if(!confirm("Revoke this API key? Apps using it will stop working.")) return; try{ await api("/api/admin/apikeys/"+encodeURIComponent(id),{method:"DELETE"}); toast("Key revoked"); integrationsPage(); }catch(e){ toast(e.message); } }
+function addHook(){ const events=(window._wh&&window._wh.events)||[];
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Add webhook</h2>
+    <div class="field"><label>Payload URL <span class="req">*</span></label><input id="wh_url" placeholder="https://example.com/hook"></div>
+    <div class="field"><label>Secret (optional — signs the payload)</label><input id="wh_secret"></div>
+    <div class="field"><label>Events</label><div style="display:flex;flex-direction:column;gap:6px">${events.map(e=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="wh_ev" value="${esc(e)}" style="width:auto;min-height:0;margin-right:8px">${esc(e)}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Leave all unticked to receive every event.</p></div>
+    <div class="row-actions"><button class="btn gold" onclick="saveHook()">Add</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+}
+async function saveHook(){ const url=val("wh_url").trim(); if(!/^https?:\/\//i.test(url)){ toast("Enter a valid http(s) URL"); return; }
+  const events=[...document.querySelectorAll('.wh_ev:checked')].map(c=>c.value);
+  try{ await api("/api/admin/webhooks",{method:"POST",body:{url,secret:val("wh_secret"),events}}); closeModal(); toast("Webhook added"); integrationsPage(); }catch(e){ toast(e.message); } }
+async function delHook(id){ if(!confirm("Delete this webhook?")) return; try{ await api("/api/admin/webhooks/"+encodeURIComponent(id),{method:"DELETE"}); toast("Webhook deleted"); integrationsPage(); }catch(e){ toast(e.message); } }
 
 /* team & access */
 async function team(){
