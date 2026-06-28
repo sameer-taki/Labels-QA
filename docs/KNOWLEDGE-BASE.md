@@ -46,9 +46,10 @@ customer/product → **Create Job & Begin Stage 1**.
    a green ✓ / red ✗ **auto-flag** against tolerances as you type.
 2. **Reel Inspection** — add a row per roll (defect, waste, weight). You can **Import AVT report
    (CSV)** to fill rows automatically.
-3. **Sheeting / Slitting** — rolls produced, quality checks, down-time hours.
-4. **Finishing & Release** — add **hourly checks** (the banner reminds you when one is due), record
-   rejections, **sign**, and set the **Final Release Decision** (Released / Hold / Rejected).
+3. **Sheeting / Slitting** — infeed roll, in-process checks, production summary, waste summary, down-time.
+4. **Finishing & Release** — add **hourly checks** (the banner reminds you when one is due), complete
+   the **Line Clearance** (quantity on-hold, disposition, handover) and **sign**. The job is **Released**
+   automatically once all four stages are complete; use **Hold** to stop a release.
 
 ### B5. Look up a job's full record
 **Job Lookup →** type/scan the Job # → **Search**. You get every stage on one page. Tap

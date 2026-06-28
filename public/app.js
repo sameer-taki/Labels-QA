@@ -1,8 +1,39 @@
 "use strict";
 /* Golden QA - Starkist Label Inspection (tablet-first PWA front-end) */
 
-const QC_PARAMS = ["Banded Bundle Checked","Shrink-Wrapped Bundle Checked","Packing Label Checked","Finished Good Pallet Checked","Label Orientation in Bundle","Line Clearance Status","Curling","Printing Defects","Cutting Defects"];
 const YN = ["","Yes","No","N/A"];
+/* option sets (QA spec) */
+const PASS_FAIL = ["","Pass","Fail"];
+const CORRECT = ["","Correct","Incorrect"];
+const WITHIN_TOL = ["","Within tolerance","Fail"];
+const PROCEED = ["","Proceed","Fail"];
+const INK_SCUFF = ["","Pass - no ink transfer","<5% ink transfer",">5% ink transfer","Fail >10% ink transfer"];
+const DISPOSITION = ["","Re-work","Dump"];
+const HANDOVER = ["","Communicated","N/A"];
+/* Stage-4 hourly QC check columns (label + dropdown options; no opts = free text) */
+const HOURLY_COLS = [
+  {k:"Barcode",opts:CORRECT},{k:"Product Code"},{k:"Label Width (mm)"},{k:"Label Height (mm)"},
+  {k:"Print Quality",opts:PASS_FAIL},{k:"Cutting Quality",opts:PASS_FAIL},{k:"Physical Appearance",opts:["","Flat","Curl"]},
+  {k:"Label Orientation in Bundle",opts:CORRECT},{k:"Bundle Quantity",opts:PASS_FAIL},{k:"Shrink Wrap Quality",opts:["","Tight","Loose"]},
+  {k:"Outer Labels Verified",opts:CORRECT},{k:"Comments"}
+];
+/* Stage-1 job-running QC test columns */
+const RUN_COLS = [
+  {k:"text",label:"Text Verification",opts:PASS_FAIL},{k:"colour",label:"Colour vs Reference",opts:PASS_FAIL},
+  {k:"registration",label:"Print Registration",opts:WITHIN_TOL},{k:"inkAdhesion",label:"Ink Adhesion (3M Tape)",opts:PASS_FAIL},
+  {k:"gs1",label:"GS1 Barcode"},{k:"cofFilmMetal",label:"COF (Film-Metal)"},{k:"cofFilmFilm",label:"COF (Film-Film)"},
+  {k:"inkScuffing",label:"Ink Scuffing @250",opts:INK_SCUFF},{k:"comments",label:"Comments"}
+];
+/* Stage-3 in-process check columns */
+const PROC_COLS = [
+  {k:"time",label:"Time Checked"},{k:"sheetSize",label:"Sheet Cutting Size L×W (mm)"},{k:"repeatVariation",label:"Repeat Variation from Eyemark"},
+  {k:"printQuality",label:"Print Quality"},{k:"varnishPosition",label:"Varnish Position"},{k:"barcode",label:"Barcode Verification"},
+  {k:"sheetAppearance",label:"Sheet Appearance"},{k:"sheetStackQuality",label:"Sheet Stack Quality"},{k:"comments",label:"Comments"}
+];
+const WASTE_COLS = [
+  {k:"setup",label:"Set-up"},{k:"printDefects",label:"Print Defects"},{k:"coreWinding",label:"Core Winding"},
+  {k:"webBreak",label:"Web Break"},{k:"jobChange",label:"Job-change"},{k:"mechanical",label:"Mechanical"}
+];
 const ROLES = ["QA Officer","Supervisor","Quality Manager","Administrator"];
 const NAV = [
   { group:"Overview", items:[ {v:"dashboard",label:"Dashboard",icon:"dashboard"}, {v:"exec",label:"Executive",icon:"exec",mgr:true} ]},
@@ -230,22 +261,25 @@ async function exportXls(){
 
 /* ---------- new job ---------- */
 function newJob(){
+  const ptOpts=(MD.productTypes||[]).map(p=>`<option>${esc(p)}</option>`).join("");
   const opts=Object.keys(MD.machines).map(m=>`<option value="${m}">${esc(MD.machines[m].label)} (${MD.machines[m].form})</option>`).join("");
-  app().innerHTML=`<div class="card"><h2>Start a New Job</h2><p class="sub">Pick the printing machine and enter the Job #. Scan the barcode (📷) to capture it.</p>
+  app().innerHTML=`<div class="card"><h2>Start a New Job</h2><p class="sub">Pick the Product Type and enter the Job #. Scan the barcode (📷) to capture it.</p>
     <div class="grid g2">
-      <div class="field"><label>Printing Machine <span class="req">*</span></label><select id="f_machine"><option value="">— Select —</option>${opts}</select></div>
+      <div class="field"><label>Product Type <span class="req">*</span></label><select id="f_productType"><option value="">— Select —</option>${ptOpts}</select></div>
       <div class="field"><label>Job # <span class="req">*</span></label>
         <div style="display:flex;gap:8px"><input id="f_jobNo" placeholder="e.g. SK-24821"><button class="btn ghost sm" onclick="scanBarcode('f_jobNo')" title="Scan">📷</button></div></div>
+      <div class="field"><label>Printing Press <span class="req">*</span></label><select id="f_machine"><option value="">— Select —</option>${opts}</select></div>
+      <div class="field"><label>Product / Item Code</label><input id="f_itemCode" placeholder="e.g. SK-142-WR"></div>
       <div class="field"><label>Customer</label><input id="f_customer" value="StarKist"></div>
       <div class="field"><label>Product / Item</label><input id="f_product" placeholder="Label description"></div>
     </div>
-    <div class="field" style="margin-top:12px"><label>Job Description</label><textarea id="f_desc"></textarea></div>
+    <div class="field" style="margin-top:12px"><label>Product Description</label><textarea id="f_desc"></textarea></div>
     <div class="row-actions"><button class="btn gold" onclick="createJob()">Create Job &amp; Begin Stage 1</button><button class="btn ghost" onclick="go('dashboard')">Cancel</button></div></div>`;
 }
 async function createJob(){
-  const machine=$("#f_machine").value, jobNo=$("#f_jobNo").value.trim();
-  if(!machine){toast("Select a machine");return;} if(!jobNo){toast("Enter a Job #");return;}
-  try{ const job=await api("/api/jobs",{method:"POST",body:{jobNo,machine,customer:$("#f_customer").value.trim(),product:$("#f_product").value.trim(),description:$("#f_desc").value.trim()}});
+  const productType=$("#f_productType").value, machine=$("#f_machine").value, jobNo=$("#f_jobNo").value.trim();
+  if(!productType){toast("Select a product type");return;} if(!jobNo){toast("Enter a Job #");return;} if(!machine){toast("Select a printing press");return;}
+  try{ const job=await api("/api/jobs",{method:"POST",body:{jobNo,machine,productType,itemCode:$("#f_itemCode").value.trim(),customer:$("#f_customer").value.trim(),product:$("#f_product").value.trim(),description:$("#f_desc").value.trim()}});
     toast("Job "+jobNo+" created"); go("entry",{jobNo,stage:"stage1"}); }
   catch(e){ toast(e.message); }
 }
@@ -264,13 +298,14 @@ async function entry(){
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
       <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}</p></div>
-      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn ghost sm" onclick="raiseCapaFor('${jsq(JOB.jobNo)}')">Raise CAPA</button>`:''} ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn ghost sm" onclick="raiseCapaFor('${jsq(JOB.jobNo)}')">Raise CAPA</button>`:''} ${canHold&&JOB.statusOverride?`<button class="btn ghost sm" onclick="releaseJob('${jsq(JOB.jobNo)}')">Clear hold</button>`:''} ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
     </div>
     <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
     <div class="stagebar">${bar}</div><div id="stageform"></div></div>`;
   stageForm(CUR.stage);
 }
 async function holdJob(no){ const reason=prompt("Reason for placing on hold?"); if(reason===null)return; await api("/api/jobs/"+encodeURIComponent(no)+"/hold",{method:"POST",body:{reason}}); toast("Job on hold"); entry(); }
+async function releaseJob(no){ if(!confirm("Clear the hold on "+no+"? It returns to its automatic status (Released once all 4 stages are complete).")) return; try{ await api("/api/jobs/"+encodeURIComponent(no)+"/release",{method:"POST",body:{}}); toast("Hold cleared"); entry(); }catch(e){ toast(e.message); } }
 function editJobModal(){ const machines=MD.machines||{}; const canMachine=[1,2,3,4].every(n=>!(JOB["stage"+n]&&JOB["stage"+n]._done));
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Edit ${esc(JOB.jobNo)}</h2>
     <div class="field"><label>Customer</label><input id="ej_customer" value="${esc(JOB.customer||'')}"></div>
@@ -308,48 +343,76 @@ function tolFlag(field,v){ const t=MD.tolerances||{}; v=parseFloat(v);
   if(field==="reg"){ if(isNaN(v))return""; const ok=v<=t.registrationMaxMm; return `<div class="flag ${ok?'ok':'bad'}">${ok?'✓ ≤ '+t.registrationMaxMm+'mm':'✗ exceeds '+t.registrationMaxMm+'mm'}</div>`; }
   return "";
 }
-function s1flags(){ ["s1_cofFilmMetal","s1_printRegistration"].forEach(id=>{ const e=document.getElementById(id); if(e)e.oninput=()=>{ document.getElementById(id+"_f").innerHTML = id.includes("cof")?tolFlag("cof",e.value):tolFlag("reg",e.value); }; }); }
+function s1flags(){ const e=document.getElementById("s1_setupCofFilmMetal"); if(e)e.oninput=()=>{ const f=document.getElementById("s1_setupCofFilmMetal_f"); if(f)f.innerHTML=tolFlag("cof",e.value); }; }
 
-function s1(d){ const mc=MD.machines[JOB.machine]||{stations:[]}; const stations=(d.stations&&d.stations.length)?d.stations:mc.stations.map(n=>({name:n,uv:"",anilox:"",teeth:"",ink:"",batch:"",by:""})); window._st=stations;
-  const strows=stations.map((s,i)=>`<tr><td><b>${esc(s.name)}</b></td><td><input data-st="${i}" data-f="uv" value="${esc(s.uv)}"></td><td><input data-st="${i}" data-f="anilox" value="${esc(s.anilox)}"></td><td><input data-st="${i}" data-f="teeth" value="${esc(s.teeth)}"></td><td><input data-st="${i}" data-f="ink" value="${esc(s.ink)}"></td><td><input data-st="${i}" data-f="batch" value="${esc(s.batch)}"></td><td><input data-st="${i}" data-f="by" value="${esc(s.by)}"></td></tr>`).join("");
-  return `<h3>Job Details</h3><div class="grid g4">${fT("s1_date","Date",d.date||JOB.created)}${fT("s1_productDescription","Product Description",d.productDescription||JOB.product)}${fS("s1_proceed","Proceed With Job",d.proceed||"",YN)}${fT("s1_qaOfficer","QA Officer",d.qaOfficer||ME.name)}${fT("s1_operator","Operator",d.operator)}${fT("s1_supervisor","Supervisor",d.supervisor)}</div>
-  <h3>Material</h3><div class="grid g3">${fT("s1_materialType","Material Type",d.materialType)}${fT("s1_thicknessGrammage","Thickness (µm) & Grammage",d.thicknessGrammage)}${fT("s1_substrate","Substrate",d.substrate)}${fT("s1_batchDetails","Batch Details",d.batchDetails)}${fT("s1_dyneLevel","Dyne Level",d.dyneLevel)}${fT("s1_supplier","Supplier",d.supplier)}</div>
-  <h3>Print Stations (${esc(mc.label||JOB.machine)})</h3><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>UV/IR</th><th>Anilox</th><th>Teeth</th><th>Ink</th><th>Batch</th><th>By</th></tr></thead><tbody>${strows}</tbody></table></div>
-  <h3>Machine Settings</h3><div class="grid g4">${fT("s1_unwinderTension","Unwinder Tension (N)",d.unwinderTension)}${fT("s1_infeedTension","In-Feed Tension (N)",d.infeedTension)}${fT("s1_rewindTension","Rewind Tension (N)",d.rewindTension)}${fT("s1_outfeedTension","Out-Feed Tension (N)",d.outfeedTension)}${fT("s1_machineSpeed","Speed (mpm)",d.machineSpeed)}${fT("s1_airPressure","Air Pressure",d.airPressure)}${fT("s1_chillerTemp","Chiller Temp",d.chillerTemp)}${fT("s1_corona","Corona (W·min/m²)",d.corona)}</div>
-  <h3>QC Inspection <span style="font-weight:400;color:var(--muted);font-size:13px">(auto-checked vs tolerances)</span></h3><div class="grid g4">
-    ${fT("s1_textColorLayout","Text/Colour/Layout vs Sample",d.textColorLayout)}${fT("s1_printScuffing","Print Scuffing @250",d.printScuffing)}
-    <div class="field"><label>COF (Film to Metal)</label><input id="s1_cofFilmMetal" value="${esc(d.cofFilmMetal||'')}"><div id="s1_cofFilmMetal_f">${tolFlag("cof",d.cofFilmMetal)}</div></div>
-    ${fT("s1_cofFilmFilm","COF (Film to Film)",d.cofFilmFilm)}${fT("s1_scotchTape","3M Scotch Tape Test",d.scotchTape)}${fT("s1_gs1Barcode","GS1 Barcode Verification",d.gs1Barcode)}
-    <div class="field"><label>Print Registration (mm)</label><input id="s1_printRegistration" value="${esc(d.printRegistration||'')}"><div id="s1_printRegistration_f">${tolFlag("reg",d.printRegistration)}</div></div>
-    ${fT("s1_tackSetoff","Tack & Setoff",d.tackSetoff)}</div>
-  ${fA("s1_comments","Comments",d.comments)}${photoBlock(d)}${saveBar("stage1")}`;
+function s1(d){
+  const mc=MD.machines[JOB.machine]||{label:JOB.machine,stationGroups:[]};
+  const groups=(mc.stationGroups||[]).map(g=>({title:g.title||"Stations",stations:g.stations||[],cols:g.cols||[]}));
+  let stations=(d.stations&&d.stations.length)?d.stations:[];
+  if(!stations.length){ groups.forEach((g,gi)=>g.stations.forEach(n=>{ const o={group:gi,name:String(n)}; g.cols.forEach(c=>o[c.key]=""); stations.push(o); })); }
+  window._st=stations;
+  const stationTables=groups.map((g,gi)=>{
+    const head=`<tr><th>Station</th>${g.cols.map(c=>`<th>${esc(c.label)}</th>`).join("")}</tr>`;
+    const rows=stations.map((s,i)=>({s,i})).filter(x=>(x.s.group||0)===gi).map(({s,i})=>`<tr><td><b>${esc(s.name)}</b></td>${g.cols.map(c=>`<td><input data-st="${i}" data-f="${esc(c.key)}" value="${esc(s[c.key]||'')}"></td>`).join("")}</tr>`).join("");
+    return `<h4 style="margin:14px 0 6px">${esc(g.title)}</h4><div style="overflow-x:auto"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  }).join("")||`<p class="sub">No print stations defined for this press.</p>`;
+  window._materials=(d.materials&&d.materials.length)?d.materials:[{}];
+  window._runs=(d.runningTests&&d.runningTests.length)?d.runningTests:[{roll:"1"}];
+  const MAT_COLS=[{k:"materialType",label:"Material Type"},{k:"gauge",label:"Gauge/Thickness (µ)"},{k:"grammage",label:"Grammage GSM"},{k:"dyne",label:"Dyne Level"},{k:"supplier",label:"Supplier"},{k:"batch",label:"Batch#"}];
+  const runCols=[{k:"roll",label:"Roll#"}].concat(RUN_COLS);
+  return `<h3>Stage 1 — Printing</h3><div class="grid g4">${fT("s1_pressLabel","Printing Press",mc.label||JOB.machine)}${fT("s1_operator","Operator",d.operator)}${fT("s1_qaOfficer","QA Officer",d.qaOfficer)}${fT("s1_supervisor","Production Supervisor",d.supervisor)}</div>
+  <h3>Job Details</h3><div class="grid g4">${fT("s1_date","Date",d.date||JOB.created)}${fT("s1_jobNo","Job #",JOB.jobNo)}${fT("s1_productDescription","Product Description",d.productDescription||JOB.product)}${fS("s1_proceed","Proceed With Job",d.proceed||"",YN)}</div>
+  <h3>Material</h3>${repTable("_materials",MAT_COLS,"+ Add raw material")}
+  <h3>Print Stations (${esc(mc.label||JOB.machine)})</h3>${stationTables}
+  <h3>Machine Settings</h3><div class="grid g4">${fT("s1_unwinderTension","Unwinder Tension (N)",d.unwinderTension)}${fT("s1_infeedTension","In-Feed Tension (N)",d.infeedTension)}${fT("s1_outfeedTension","Out-Feed Tension (N)",d.outfeedTension)}${fT("s1_rewindTension","Rewind Tension (N)",d.rewindTension)}${fT("s1_machineSpeed","Speed (mpm)",d.machineSpeed)}${fT("s1_corona1","Corona 1 (W·min/m²)",d.corona1)}${fT("s1_corona2","Corona 2 (W·min/m²)",d.corona2)}${fT("s1_corona3","Corona 3 (W·min/m²)",d.corona3)}${fT("s1_corona4","Corona 4 (W·min/m²)",d.corona4)}</div>
+  <h3>QC — Job Set-Up Tests</h3><div class="grid g4">
+    ${fS("s1_setupText","Text Verification",d.setupText||"",PASS_FAIL)}${fS("s1_setupColour","Colour vs Reference Standard",d.setupColour||"",PASS_FAIL)}${fS("s1_setupRegistration","Print Registration",d.setupRegistration||"",WITHIN_TOL)}${fS("s1_setupInkAdhesion","Ink Adhesion (3M Tape)",d.setupInkAdhesion||"",PASS_FAIL)}
+    ${fT("s1_setupGs1","GS1 Barcode Verification",d.setupGs1)}
+    <div class="field"><label>COF (Film to Metal)</label><input id="s1_setupCofFilmMetal" value="${esc(d.setupCofFilmMetal||'')}"><div id="s1_setupCofFilmMetal_f">${tolFlag("cof",d.setupCofFilmMetal)}</div></div>
+    ${fT("s1_setupCofFilmFilm","COF (Film to Film)",d.setupCofFilmFilm)}${fT("s1_setupInkScuffing","Ink Scuffing @250 strokes/4lbs",d.setupInkScuffing)}</div>
+  <h3>QC — Status of Approval</h3><div class="grid g3">${fS("s1_approvalQa","QA Officer",d.approvalQa||"",PROCEED)}${fS("s1_approvalOperator","Operator",d.approvalOperator||"",PROCEED)}${fS("s1_approvalSupervisor","Supervisor",d.approvalSupervisor||"",PROCEED)}</div>
+  ${fA("s1_comments","Comments",d.comments)}
+  <h3>QC — Job Running Quality Control Tests</h3>${repTable("_runs",runCols,"+ Add roll")}
+  ${photoBlock(d)}${saveBar("stage1")}`;
 }
 function s2(d){ const rows=(d.rows&&d.rows.length)?d.rows:[{roll:"1",totalMeters:"",wasteIn:"",wasteOut:"",defect:"",weightKg:"",sign:""}]; window._rows=rows;
   const defOpts=(MD.defectTypes||[]).map(x=>`<option>${esc(x)}</option>`).join("");
   const body=rows.map((x,i)=>`<tr><td><input data-rw="${i}" data-f="roll" value="${esc(x.roll)}" style="width:54px"></td><td><input data-rw="${i}" data-f="totalMeters" value="${esc(x.totalMeters)}"></td><td><input data-rw="${i}" data-f="wasteIn" value="${esc(x.wasteIn)}"></td><td><input data-rw="${i}" data-f="wasteOut" value="${esc(x.wasteOut)}"></td><td><input list="defl" data-rw="${i}" data-f="defect" value="${esc(x.defect)}"></td><td><input data-rw="${i}" data-f="weightKg" value="${esc(x.weightKg)}"></td><td><input data-rw="${i}" data-f="sign" value="${esc(x.sign)}"></td><td><button class="btn danger sm" onclick="rwDel(${i})">×</button></td></tr>`).join("");
-  return `<datalist id="defl">${defOpts}</datalist><h3>Reel Inspection Header (F-021)</h3><div class="grid g4">${fT("s2_date","Date",d.date||JOB.created)}${fT("s2_machineName","Machine Name",d.machineName)}${fT("s2_shift","Shift",d.shift)}${fT("s2_qaOfficer","QA Officer",d.qaOfficer||ME.name)}${fT("s2_operator","Operator",d.operator)}${fT("s2_avtRef","AVT Report Ref",d.avtRef)}</div>
+  return `<datalist id="defl">${defOpts}</datalist><h3>Reel Inspection Header (F-021)</h3><div class="grid g4">${fT("s2_date","Date",d.date||JOB.created)}${fT("s2_machineName","Machine Name",d.machineName)}${fT("s2_shift","Shift",d.shift)}${fT("s2_qaOfficer","QA Officer",d.qaOfficer)}${fT("s2_operator","Operator",d.operator)}${fT("s2_avtRef","AVT Report Ref",d.avtRef)}</div>
   <div class="row-actions"><button class="btn ghost sm" onclick="avtImportInline()">⤓ Import AVT report (CSV)</button></div>
   <h3>Defect &amp; Waste Log (per roll)</h3><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th><th>Sign</th><th></th></tr></thead><tbody id="s2body">${body}</tbody></table></div>
   <div class="row-actions"><button class="btn ghost sm" onclick="rwAdd()">+ Add row</button></div>${fA("s2_remarks","Remarks",d.remarks)}${photoBlock(d)}${saveBar("stage2")}`;
 }
-function s3(d){ const rolls=(d.rolls&&d.rolls.length)?d.rolls:[{no:"1",material:"",reelWidth:"",size:"",gsm:"",repeat:"",totalSheets:"",wasteKg:"",goodSheets:""}]; window._rolls=rolls;
-  const body=rolls.map((r,i)=>`<tr><td><input data-rl="${i}" data-f="no" value="${esc(r.no)}" style="width:46px"></td><td><input data-rl="${i}" data-f="material" value="${esc(r.material)}"></td><td><input data-rl="${i}" data-f="reelWidth" value="${esc(r.reelWidth)}"></td><td><input data-rl="${i}" data-f="size" value="${esc(r.size)}"></td><td><input data-rl="${i}" data-f="gsm" value="${esc(r.gsm)}"></td><td><input data-rl="${i}" data-f="repeat" value="${esc(r.repeat)}"></td><td><input data-rl="${i}" data-f="totalSheets" value="${esc(r.totalSheets)}"></td><td><input data-rl="${i}" data-f="wasteKg" value="${esc(r.wasteKg)}"></td><td><input data-rl="${i}" data-f="goodSheets" value="${esc(r.goodSheets)}"></td><td><button class="btn danger sm" onclick="rlDel(${i})">×</button></td></tr>`).join("");
-  return `<h3>Job Run</h3><div class="grid g3">${fT("s3_date","Date",d.date||JOB.created)}${fT("s3_customerItem","Customer / Item",d.customerItem||(JOB.customer+" / "+(JOB.product||"")))}${fT("s3_operatorName","Operator",d.operatorName)}${fT("s3_startTime","Start Time",d.startTime,"hh:mm")}${fT("s3_finishTime","Finish Time",d.finishTime,"hh:mm")}</div>
-  <h3>Rolls Produced</h3><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Material</th><th>Reel W</th><th>Size</th><th>GSM</th><th>Repeat</th><th>Total</th><th>Waste Kg</th><th>Good</th><th></th></tr></thead><tbody id="s3body">${body}</tbody></table></div><div class="row-actions"><button class="btn ghost sm" onclick="rlAdd()">+ Add roll</button></div>
-  <h3>Quality Checks (random sampling)</h3><div class="grid g4">${fT("s3_thickness","Total Thickness (µm)",d.thickness)}${fS("s3_colours","Colours",d.colours||"",["","Pass","Fail"])}${fS("s3_register","Register",d.register||"",["","Pass","Fail"])}${fS("s3_copy","Copy",d.copy||"",["","Pass","Fail"])}${fT("s3_barcode","Barcode (scan)",d.barcode)}${fT("s3_webTension","Web Tension",d.webTension)}${fS("s3_curling","Curling",d.curling||"",["","O","In","None"])}${fT("s3_cuttingAccuracy","Cutting & Accuracy",d.cuttingAccuracy)}</div>
-  <h3>Down Time (hrs)</h3><div class="grid g4">${fT("s3_setupHours","Setup",d.setupHours)}${fT("s3_dtMaterial","Material",d.dtMaterial)}${fT("s3_dtWindup","Windup",d.dtWindup)}${fT("s3_dtDamage","Damage",d.dtDamage)}${fT("s3_dtMechanical","Mechanical",d.dtMechanical)}${fT("s3_dtElectrical","Electrical",d.dtElectrical)}${fT("s3_dtOthers","Others",d.dtOthers)}</div>
-  <div class="grid g2">${fA("s3_operatorRemarks","Operator Remarks",d.operatorRemarks)}${fA("s3_qcRemarks","QC Remarks",d.qcRemarks)}</div>${photoBlock(d)}${saveBar("stage3")}`;
+function s3(d){
+  window._proc=(d.inProcessChecks&&d.inProcessChecks.length)?d.inProcessChecks:[{}];
+  window._prod=(d.productionSummary&&d.productionSummary.length)?d.productionSummary:[{roll:"1"}];
+  window._waste=(d.wasteRows&&d.wasteRows.length)?d.wasteRows:[{}];
+  const prodCols=[{k:"roll",label:"Roll #"},{k:"source",label:"Printing Source",opts:["","BOBST","NILPETER","FLEXO450"]},{k:"inputMeters",label:"Input Meters"},{k:"outputMeters",label:"Output Meters"},{k:"sheets",label:"# Sheets Produced"},{k:"pallet",label:"Pallet #"},{k:"comments",label:"Comments"}];
+  const totMeters=window._prod.reduce((a,r)=>a+(parseFloat(r.outputMeters)||0),0);
+  const totSheets=window._prod.reduce((a,r)=>a+(parseFloat(r.sheets)||0),0);
+  const totSetup=window._waste.reduce((a,r)=>a+(parseFloat(r.setup)||0),0);
+  const totRun=window._waste.reduce((a,r)=>a+["printDefects","coreWinding","webBreak","jobChange","mechanical"].reduce((x,k)=>x+(parseFloat(r[k])||0),0),0);
+  return `<h3>Job Run</h3><div class="grid g4">${fT("s3_date","Date",d.date||JOB.created)}${fT("s3_customerItem","Customer / Item",d.customerItem||(JOB.customer+" / "+(JOB.product||"")))}${fT("s3_startTime","Start Time",d.startTime,"hh:mm")}${fT("s3_finishTime","Finish Time",d.finishTime,"hh:mm")}</div>
+  <h3>Infeed Roll</h3><div class="grid g4">${fT("s3_infeedRoll","Roll #",d.infeedRoll)}${fT("s3_infeedMaterial","Material",d.infeedMaterial)}${fT("s3_infeedReelSize","Reel Size",d.infeedReelSize)}${fT("s3_infeedGrammage","Grammage",d.infeedGrammage)}${fT("s3_infeedCuttingRepeat","Cutting Repeat",d.infeedCuttingRepeat)}</div>
+  <h3>Quality in Process Checks</h3>${repTable("_proc",PROC_COLS,"+ Add row")}
+  <h3>Production Summary</h3>${repTable("_prod",prodCols,"+ Add row")}
+  <div class="grid g2"><div class="field"><label>Total Meters Produced</label><input value="${esc(round2(totMeters))}" disabled></div><div class="field"><label>Total Sheets Produced</label><input value="${esc(totSheets)}" disabled></div></div>
+  <h3>Production Waste Summary (kg)</h3>${repTable("_waste",WASTE_COLS,"+ Add row")}
+  <div class="grid g2"><div class="field"><label>Total Setup Waste (kg)</label><input value="${esc(round2(totSetup))}" disabled></div><div class="field"><label>Total Running Waste (kg)</label><input value="${esc(round2(totRun))}" disabled></div></div>
+  <h3>Downtime Analysis (min/hrs)</h3><div class="grid g4">${fT("s3_dtMaterial","Material",d.dtMaterial)}${fT("s3_dtWinding","Winding",d.dtWinding)}${fT("s3_dtReelDamage","Reel Damage",d.dtReelDamage)}${fT("s3_dtMechanical","Mechanical",d.dtMechanical)}${fT("s3_dtElectrical","Electrical",d.dtElectrical)}</div>
+  <h3>Sign-off</h3><div class="grid g3">${fT("s3_operatorName","Operator",d.operatorName)}${fT("s3_qaOfficer","QA Officer",d.qaOfficer)}${fT("s3_supervisor","Production Supervisor",d.supervisor)}</div>
+  ${fA("s3_comments","Comments",d.comments)}${photoBlock(d)}${saveBar("stage3")}`;
 }
 let hourlyTimer=null;
 function s4(d){ const checks=(d.checks&&d.checks.length)?d.checks:[{time:"",vals:{}}]; window._checks=checks;
-  const head=`<tr><th>Time</th>${QC_PARAMS.map(p=>`<th>${esc(p)}</th>`).join("")}<th></th></tr>`;
-  const body=checks.map((c,i)=>`<tr><td><input data-ck="${i}" data-time="1" value="${esc(c.time)}" placeholder="hh:mm" style="width:78px"></td>${QC_PARAMS.map(p=>`<td><select data-ck="${i}" data-p="${esc(p)}">${YN.map(v=>`<option ${v===(c.vals&&c.vals[p])?'selected':''}>${v}</option>`).join("")}</select></td>`).join("")}<td><button class="btn danger sm" onclick="ckDel(${i})">×</button></td></tr>`).join("");
+  const head=`<tr><th>Time</th>${HOURLY_COLS.map(c=>`<th>${esc(c.k)}</th>`).join("")}<th></th></tr>`;
+  const body=checks.map((c,i)=>`<tr><td><input data-ck="${i}" data-time="1" value="${esc(c.time)}" placeholder="hh:mm" style="width:78px"></td>${HOURLY_COLS.map(col=>{ const v=(c.vals&&c.vals[col.k])||""; return col.opts?`<td><select data-ck="${i}" data-p="${esc(col.k)}">${col.opts.map(o=>`<option ${o===v?'selected':''}>${esc(o)}</option>`).join("")}</select></td>`:`<td><input data-ck="${i}" data-p="${esc(col.k)}" value="${esc(v)}" style="min-width:120px"></td>`; }).join("")}<td><button class="btn danger sm" onclick="ckDel(${i})">×</button></td></tr>`).join("");
   return `<div class="banner warn" id="hourlyBanner">Hourly checks are mandatory. <span id="hourlyMsg"></span></div>
-  <h3>Inspection &amp; Packing Header</h3><div class="grid g4">${fT("s4_date","Date",d.date||JOB.created)}${fT("s4_productItem","Product / Item",d.productItem||JOB.product)}${fT("s4_shift","Shift",d.shift)}${fT("s4_shiftStartFinish","Shift Start & Finish",d.shiftStartFinish)}${fT("s4_labelWidth","Label Width (mm)",d.labelWidth)}${fT("s4_labelLength","Label Length (mm)",d.labelLength)}${fT("s4_labelThickness","Label Thickness",d.labelThickness)}${fT("s4_labelGauge","Label Gauge",d.labelGauge)}</div>
+  <h3>Inspection &amp; Packing Header</h3><div class="grid g4">${fT("s4_date","Date",d.date||JOB.created)}${fT("s4_productItem","Product / Item",d.productItem||JOB.product)}${fT("s4_shift","Shift",d.shift)}${fT("s4_shiftStartFinish","Shift Start & Finish",d.shiftStartFinish)}${fT("s4_labelWidth","Label Width (mm)",d.labelWidth)}${fT("s4_labelLength","Label Length (mm)",d.labelLength)}${fT("s4_labelThickness","Label Thickness",d.labelThickness)}</div>
   <h3>Hourly QC Checks</h3><div style="overflow-x:auto"><table><thead>${head}</thead><tbody id="s4body">${body}</tbody></table></div>
   <div class="row-actions"><button class="btn gold sm" onclick="ckAdd(true)">+ Add hourly check (now)</button></div>
-  <h3>Rejections &amp; Sign-off</h3><div class="grid g3">${fT("s4_rejectedQty","Rejected / Hold Qty",d.rejectedQty)}${fT("s4_operatorName","Operator",d.operatorName)}${fT("s4_qcName","QC Name",d.qcName||ME.name)}${fT("s4_packersNames","Packers' Names",d.packersNames)}${fS("s4_statusFinal","Final Release Decision",d.statusFinal||"",["","Released","Hold","Rejected"])}</div>
-  ${fA("s4_reasonsRejection","Reasons for Rejection",d.reasonsRejection)}${fA("s4_remarks","Remarks",d.remarks)}
+  <h3>Line Clearance</h3><div class="grid g4">${fT("s4_quantityOnHold","Quantity On-Hold",d.quantityOnHold)}${fT("s4_reasonForRejection","Reason for Rejection",d.reasonForRejection)}${fS("s4_disposition","Disposition",d.disposition||"",DISPOSITION)}${fS("s4_unwantedMaterialsRemoved","Unwanted Materials Removed",d.unwantedMaterialsRemoved||"",YN)}</div>
+  <div class="grid g2">${fS("s4_nextShiftQaHandover","Next Shift QA Handover",d.nextShiftQaHandover||"",HANDOVER)}</div>
   <h3>Signature</h3><div id="sigWrap"></div>${photoBlock(d)}${saveBar("stage4")}`;
 }
 function startHourly(){ renderSig(); if(hourlyTimer)clearInterval(hourlyTimer); const tick=()=>{ const cks=(window._checks||[]).filter(c=>c.time); const msg=$("#hourlyMsg"); const ban=$("#hourlyBanner"); if(!msg)return;
@@ -359,16 +422,27 @@ function startHourly(){ renderSig(); if(hourlyTimer)clearInterval(hourlyTimer); 
   tick(); hourlyTimer=setInterval(tick,15000); }
 
 /* repeating-row helpers */
+function round2(n){ return Math.round((parseFloat(n)||0)*100)/100; }
 function collectSt(){ document.querySelectorAll('#stageform input[data-st]').forEach(i=>{ const x=window._st[+i.dataset.st]; if(x)x[i.dataset.f]=i.value; }); }
 function collectRw(){ document.querySelectorAll('#s2body input[data-rw]').forEach(i=>{ const x=window._rows[+i.dataset.rw]; if(x)x[i.dataset.f]=i.value; }); }
-function rwAdd(){ collectRw(); window._rows.push({roll:String(window._rows.length+1),totalMeters:"",wasteIn:"",wasteOut:"",defect:"",weightKg:"",sign:""}); stageForm("stage2"); }
-function rwDel(i){ collectRw(); window._rows.splice(i,1); if(!window._rows.length)window._rows.push({roll:"1"}); stageForm("stage2"); }
-function collectRl(){ document.querySelectorAll('#s3body input[data-rl]').forEach(i=>{ const x=window._rolls[+i.dataset.rl]; if(x)x[i.dataset.f]=i.value; }); }
-function rlAdd(){ collectRl(); window._rolls.push({no:String(window._rolls.length+1),material:"",reelWidth:"",size:"",gsm:"",repeat:"",totalSheets:"",wasteKg:"",goodSheets:""}); stageForm("stage3"); }
-function rlDel(i){ collectRl(); window._rolls.splice(i,1); if(!window._rolls.length)window._rolls.push({no:"1"}); stageForm("stage3"); }
-function collectCk(){ document.querySelectorAll('#s4body tr').forEach(tr=>{ const t=tr.querySelector('input[data-time]'); if(!t)return; const i=+t.dataset.ck; if(!window._checks[i])return; window._checks[i].time=t.value; window._checks[i].vals=window._checks[i].vals||{}; tr.querySelectorAll('select[data-p]').forEach(s=>{ window._checks[i].vals[s.dataset.p]=s.value; }); }); }
-function ckAdd(now){ collectCk(); const t=now?new Date().toTimeString().slice(0,5):""; window._checks.push({time:t,vals:{}}); stageForm("stage4"); }
-function ckDel(i){ collectCk(); window._checks.splice(i,1); if(!window._checks.length)window._checks.push({time:"",vals:{}}); stageForm("stage4"); }
+function rwAdd(){ syncStage("stage2"); window._rows.push({roll:String(window._rows.length+1),totalMeters:"",wasteIn:"",wasteOut:"",defect:"",weightKg:"",sign:""}); stageForm("stage2"); }
+function rwDel(i){ syncStage("stage2"); window._rows.splice(i,1); if(!window._rows.length)window._rows.push({roll:"1"}); stageForm("stage2"); }
+function collectCk(){ document.querySelectorAll('#s4body tr').forEach(tr=>{ const t=tr.querySelector('input[data-time]'); if(!t)return; const i=+t.dataset.ck; if(!window._checks[i])return; window._checks[i].time=t.value; window._checks[i].vals=window._checks[i].vals||{}; tr.querySelectorAll('[data-p]').forEach(s=>{ window._checks[i].vals[s.dataset.p]=s.value; }); }); }
+function ckAdd(now){ syncStage("stage4"); const t=now?new Date().toTimeString().slice(0,5):""; window._checks.push({time:t,vals:{}}); stageForm("stage4"); }
+function ckDel(i){ syncStage("stage4"); window._checks.splice(i,1); if(!window._checks.length)window._checks.push({time:"",vals:{}}); stageForm("stage4"); }
+
+/* generic repeating table bound to a window array (e.g. _materials, _runs, _proc, _prod, _waste) */
+const ARR_STAGE={ _materials:"stage1", _runs:"stage1", _proc:"stage3", _prod:"stage3", _waste:"stage3" };
+function cellField(arrKey,i,c){ const r=window[arrKey][i]||{}; const v=r[c.k]||""; const a=`data-arr="${arrKey}" data-i="${i}" data-f="${esc(c.k)}"`;
+  return c.opts?`<td><select ${a}>${c.opts.map(o=>`<option ${o===v?'selected':''}>${esc(o)}</option>`).join("")}</select></td>`:`<td><input ${a} value="${esc(v)}" style="min-width:110px"></td>`; }
+function collectArr(arrKey){ document.querySelectorAll('[data-arr="'+arrKey+'"]').forEach(el=>{ const x=window[arrKey][+el.dataset.i]; if(x)x[el.dataset.f]=el.value; }); }
+function rowAdd(arrKey){ const st=ARR_STAGE[arrKey]; syncStage(st); window[arrKey].push({}); stageForm(st); }
+function rowDel(arrKey,i){ const st=ARR_STAGE[arrKey]; syncStage(st); window[arrKey].splice(i,1); if(!window[arrKey].length)window[arrKey].push({}); stageForm(st); }
+function repTable(arrKey,cols,addLabel){
+  const head=`<tr>${cols.map(c=>`<th>${esc(c.label||c.k)}</th>`).join("")}<th></th></tr>`;
+  const body=window[arrKey].map((r,i)=>`<tr>${cols.map(c=>cellField(arrKey,i,c)).join("")}<td><button class="btn danger sm" onclick="rowDel('${arrKey}',${i})">×</button></td></tr>`).join("");
+  return `<div style="overflow-x:auto"><table><thead>${head}</thead><tbody>${body}</tbody></table></div><div class="row-actions"><button class="btn ghost sm" onclick="rowAdd('${arrKey}')">${esc(addLabel||'+ Add row')}</button></div>`;
+}
 
 /* photos */
 function photoBlock(d){ const photos=d.photos||[]; window._photos=photos.slice(); return `<h3>Photos</h3><div class="row-actions"><label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="addPhoto(event)"></label></div><div class="thumbs" id="thumbs">${photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`; }
@@ -389,22 +463,29 @@ function saveBar(stage){ return `<div class="row-actions no-print" style="margin
 /* required-field check when marking a stage complete (mirrors server validateComplete) */
 function validateStageData(stage,d){
   const reqs={
-    stage1:[["date","Date"],["qaOfficer","QA Officer"],["proceed","Proceed With Job"],["materialType","Material Type"]],
+    stage1:[["date","Date"],["qaOfficer","QA Officer"],["proceed","Proceed With Job"]],
     stage2:[["date","Date"],["qaOfficer","QA Officer"]],
     stage3:[["date","Date"],["operatorName","Operator"],["startTime","Start Time"],["finishTime","Finish Time"]],
-    stage4:[["date","Date"],["qcName","QC Name"],["statusFinal","Final Release Decision"]]
+    stage4:[["date","Date"]]
   };
   const miss=[]; (reqs[stage]||[]).forEach(([k,l])=>{ if(!String(d[k]||"").trim()) miss.push(l); });
+  if(stage==="stage1" && !((d.materials||[]).some(m=>String((m&&m.materialType)||"").trim()))) miss.push("Material Type");
   if(stage==="stage2" && !((d.rows||[]).some(r=>String(r.totalMeters||"").trim()||String(r.defect||"").trim()))) miss.push("At least one reel row");
   if(stage==="stage4"){ if(!((d.checks||[]).some(c=>String(c.time||"").trim()))) miss.push("At least one hourly check"); if(!d.signature) miss.push("Signature"); }
   return miss;
 }
-async function saveStage(stage,done){ let data={_done:done};
-  if(stage==="stage1"){ collectSt(); data.stations=window._st; ["date","productDescription","proceed","qaOfficer","operator","supervisor","materialType","thicknessGrammage","substrate","batchDetails","dyneLevel","supplier","unwinderTension","infeedTension","rewindTension","outfeedTension","machineSpeed","airPressure","chillerTemp","corona","textColorLayout","printScuffing","cofFilmMetal","cofFilmFilm","scotchTape","gs1Barcode","printRegistration","tackSetoff","comments"].forEach(k=>data[k]=val("s1_"+k)); }
+/* Collect the live form state for a stage from the DOM + window arrays (no _done flag). */
+function collectStageData(stage){ let data={};
+  if(stage==="stage1"){ collectSt(); collectArr("_materials"); collectArr("_runs"); data.stations=window._st; data.materials=window._materials; data.runningTests=window._runs; ["date","productDescription","proceed","operator","qaOfficer","supervisor","unwinderTension","infeedTension","outfeedTension","rewindTension","machineSpeed","corona1","corona2","corona3","corona4","setupText","setupColour","setupRegistration","setupInkAdhesion","setupGs1","setupCofFilmMetal","setupCofFilmFilm","setupInkScuffing","approvalQa","approvalOperator","approvalSupervisor","comments"].forEach(k=>data[k]=val("s1_"+k)); }
   else if(stage==="stage2"){ collectRw(); data.rows=window._rows; ["date","machineName","shift","qaOfficer","operator","avtRef","remarks"].forEach(k=>data[k]=val("s2_"+k)); }
-  else if(stage==="stage3"){ collectRl(); data.rolls=window._rolls; ["date","customerItem","operatorName","startTime","finishTime","thickness","colours","register","copy","barcode","webTension","curling","cuttingAccuracy","setupHours","dtMaterial","dtWindup","dtDamage","dtMechanical","dtElectrical","dtOthers","operatorRemarks","qcRemarks"].forEach(k=>data[k]=val("s3_"+k)); }
-  else if(stage==="stage4"){ collectCk(); data.checks=window._checks; ["date","productItem","shift","shiftStartFinish","labelWidth","labelLength","labelThickness","labelGauge","rejectedQty","operatorName","qcName","packersNames","statusFinal","reasonsRejection","remarks"].forEach(k=>data[k]=val("s4_"+k)); if(window._sig)data.signature=window._sig; else if(JOB.stage4)data.signature=JOB.stage4.signature; }
+  else if(stage==="stage3"){ collectArr("_proc"); collectArr("_prod"); collectArr("_waste"); data.inProcessChecks=window._proc; data.productionSummary=window._prod; data.wasteRows=window._waste; ["date","customerItem","startTime","finishTime","infeedRoll","infeedMaterial","infeedReelSize","infeedGrammage","infeedCuttingRepeat","dtMaterial","dtWinding","dtReelDamage","dtMechanical","dtElectrical","operatorName","qaOfficer","supervisor","comments"].forEach(k=>data[k]=val("s3_"+k)); }
+  else if(stage==="stage4"){ collectCk(); data.checks=window._checks; ["date","productItem","shift","shiftStartFinish","labelWidth","labelLength","labelThickness","quantityOnHold","reasonForRejection","disposition","unwantedMaterialsRemoved","nextShiftQaHandover"].forEach(k=>data[k]=val("s4_"+k)); data.signature=window._sig||(JOB.stage4&&JOB.stage4.signature)||""; }
   data.photos=window._photos||[];
+  return data;
+}
+/* Persist live form state into JOB[stage] so a repeating-table re-render keeps sibling fields. */
+function syncStage(stage){ if(!JOB||!stage)return; JOB[stage]=Object.assign(JOB[stage]||{}, collectStageData(stage)); }
+async function saveStage(stage,done){ let data=collectStageData(stage); data._done=done;
   if(done){
     const n=Number(stage.slice(-1));
     for(let k=1;k<n;k++){ if(!(JOB["stage"+k]&&JOB["stage"+k]._done)){ toast("Complete Stage "+k+" before marking Stage "+n+" complete"); return; } }
@@ -442,10 +523,11 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); i
   const kv=(l,v)=>`<div><span>${l}</span><b>${esc(v||"—")}</b></div>`;
   const kvb=ps=>`<div class="kv">${ps.map(p=>kv(p[0],p[1])).join("")}</div>`;
   const sBox=(n,nm,dn,inner)=>`<div class="summary-stage"><div class="head">Stage ${n} · ${esc(nm)} ${dn?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div><div class="body">${dn?inner:'<div class="empty" style="padding:16px">Not yet recorded.</div>'}</div></div>`;
-  const a=j.stage1||{}; let s1h=""; if(a._done){ s1h=kvb([["Date",a.date],["QAO",a.qaOfficer],["Operator",a.operator],["Proceed",a.proceed],["Material",a.materialType],["Speed",a.machineSpeed],["GS1",a.gs1Barcode],["COF f-m",a.cofFilmMetal],["Registration",a.printRegistration]])+(a.stations?`<h4>Stations</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>UV</th><th>Anilox</th><th>Ink</th><th>Batch</th></tr></thead><tbody>${a.stations.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.uv)}</td><td>${esc(s.anilox)}</td><td>${esc(s.ink)}</td><td>${esc(s.batch)}</td></tr>`).join("")}</tbody></table></div>`:"")+photosView(a); }
+  const matOf=s1=>((s1.materials&&s1.materials.length)?(s1.materials[0]||{}).materialType:s1.materialType)||"";
+  const a=j.stage1||{}; let s1h=""; if(a._done){ s1h=kvb([["Date",a.date],["QA Officer",a.qaOfficer],["Operator",a.operator],["Proceed",a.proceed],["Material",matOf(a)],["Speed",a.machineSpeed],["Setup GS1",a.setupGs1],["COF f-m",a.setupCofFilmMetal]])+((a.materials&&a.materials.length)?`<h4>Materials</h4><div style="overflow-x:auto"><table><thead><tr><th>Material</th><th>Gauge</th><th>GSM</th><th>Dyne</th><th>Supplier</th><th>Batch#</th></tr></thead><tbody>${a.materials.map(m=>`<tr><td>${esc(m.materialType)}</td><td>${esc(m.gauge)}</td><td>${esc(m.grammage)}</td><td>${esc(m.dyne)}</td><td>${esc(m.supplier)}</td><td>${esc(m.batch)}</td></tr>`).join("")}</tbody></table></div>`:"")+((a.stations&&a.stations.length)?`<h4>Print Stations</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>Ink Type</th><th>Ink Batch#</th></tr></thead><tbody>${a.stations.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.inkType||s.ink||"")}</td><td>${esc(s.inkBatch||s.batch||"")}</td></tr>`).join("")}</tbody></table></div>`:"")+photosView(a); }
   const b=j.stage2||{}; let s2h=""; if(b._done){ s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b); }
-  const e=j.stage3||{}; let s3h=""; if(e._done){ s3h=kvb([["Date",e.date],["Operator",e.operatorName],["Start",e.startTime],["Finish",e.finishTime],["Colours",e.colours],["Register",e.register],["Barcode",e.barcode],["Cutting",e.cuttingAccuracy]])+`<h4>Rolls</h4><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Reel W</th><th>Size</th><th>Total</th><th>Waste Kg</th><th>Good</th></tr></thead><tbody>${(e.rolls||[]).map(r=>`<tr><td>${esc(r.no)}</td><td>${esc(r.reelWidth)}</td><td>${esc(r.size)}</td><td>${esc(r.totalSheets)}</td><td>${esc(r.wasteKg)}</td><td>${esc(r.goodSheets)}</td></tr>`).join("")}</tbody></table></div>`+photosView(e); }
-  const f=j.stage4||{}; let s4h=""; if(f._done){ const hdr=`<tr><th>Time</th>${QC_PARAMS.map(p=>`<th title="${esc(p)}">${esc(p.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${QC_PARAMS.map(p=>{const v=c.vals&&c.vals[p];return `<td>${v==="Yes"?'<span class="pill green">Y</span>':v==="No"?'<span class="pill red">N</span>':esc(v||"—")}</td>`}).join("")}</tr>`).join("")||`<tr><td colspan=${QC_PARAMS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Rejected Qty",f.rejectedQty],["Decision",f.statusFinal],["QC",f.qcName]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
+  const e=j.stage3||{}; let s3h=""; if(e._done){ const ps=e.productionSummary||e.rolls||[]; s3h=kvb([["Date",e.date],["Operator",e.operatorName],["QA Officer",e.qaOfficer],["Start",e.startTime],["Finish",e.finishTime],["Infeed Material",e.infeedMaterial]])+`<h4>Production Summary</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Source</th><th>Input m</th><th>Output m</th><th># Sheets</th><th>Pallet</th></tr></thead><tbody>${ps.map(r=>`<tr><td>${esc(r.roll||r.no||"")}</td><td>${esc(r.source||"")}</td><td>${esc(r.inputMeters||"")}</td><td>${esc(r.outputMeters||r.totalSheets||"")}</td><td>${esc(r.sheets||"")}</td><td>${esc(r.pallet||"")}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(e); }
+  const f=j.stage4||{}; let s4h=""; if(f._done){ const pillVal=v=>(v==="Pass"||v==="Correct"||v==="Tight"||v==="Flat")?'<span class="pill green">'+esc(v)+'</span>':(v==="Fail"||v==="Incorrect"||v==="Loose"||v==="Curl")?'<span class="pill red">'+esc(v)+'</span>':esc(v||"—"); const hdr=`<tr><th>Time</th>${HOURLY_COLS.map(col=>`<th title="${esc(col.k)}">${esc(col.k.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${HOURLY_COLS.map(col=>`<td>${pillVal(c.vals&&c.vals[col.k])}</td>`).join("")}</tr>`).join("")||`<tr><td colspan=${HOURLY_COLS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Qty On-Hold",f.quantityOnHold],["Disposition",f.disposition],["Handover",f.nextShiftQaHandover]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
   host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }

@@ -185,7 +185,7 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 | Start a job | **New Job** |
 | Enter/complete stages | **Data Entry** → job → stage tile → *Save & Mark Complete* |
 | Add a defect photo | 📷 **Add photo** in any stage |
-| Sign off & release | **Stage 4** → hourly checks → sign → *Final Release Decision* |
+| Sign off & release | **Stage 4** → hourly checks → *Line Clearance* → sign (job releases when all 4 stages complete) |
 | Find a job's full record | **Job Lookup** → scan/type → *SQF PDF* |
 | Log a quality event | **NCR** (→ promote to **CAPA**) |
 | Track corrective action | **CAPA** |

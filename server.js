@@ -72,14 +72,22 @@ function seedDB() {
         mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123', [1,2,3,4]),
         mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123', [1,2,3,4]),
         mkUser('admin', 'Administrator', 'Administrator', 'admin123', [1,2,3,4]) ];
+  // Machine-specific print-station column schemas (per QA spec).
+  const GRAVURE_COLS=[{key:'pressureSetPoint',label:'Pressure Set Point'},{key:'dryingTemp',label:'Drying Temp (°C)'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'},{key:'bladeAngle',label:'Blade Angle'},{key:'bladePressure',label:'Blade Pressure'},{key:'inkViscosity',label:'Ink Viscosity'}];
+  const UVFLEXO_COLS=[{key:'uvLampIntensity',label:'UV Lamp Intensity (%)'},{key:'aniloxPressure',label:'Anilox Pressure'},{key:'platePressure',label:'Plate Pressure'},{key:'anilox',label:'Anilox #'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
+  const FLEXO_COLS=[{key:'uvSetting',label:'UV Setting'},{key:'anilox',label:'Anilox #'},{key:'cylinderTeeth',label:'Cylinder Teeth'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
   return {
     users,
     masterdata: {
       machines: {
-        Flexo450: { form: 'F-040-A', label: 'Flexo 450', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8','Station 9'] },
-        NilPeter: { form: 'F-016-E', label: 'NilPeter', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8'] },
-        BOBST: { form: 'F-027-A', label: 'BOBST (Lamination)', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'] }
+        Flexo450: { form: 'F-040-A', label: 'Flexo 450', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8','Station 9'],
+          stationGroups:[{ title:'Flexo Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:FLEXO_COLS }] },
+        NilPeter: { form: 'F-016-E', label: 'NilPeter', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8'],
+          stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','11'], cols:GRAVURE_COLS },{ title:'UV Flexo Stations', stations:['5','6','7','8','9','10'], cols:UVFLEXO_COLS }] },
+        BOBST: { form: 'F-027-A', label: 'BOBST (Lamination)', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'],
+          stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:GRAVURE_COLS }] }
       },
+      productTypes: ['Pressure Sensitive Adhesive Labels','Starkist Paper Labels','Flexible Packaging- Noodles Inner','Flexible Packaging- Noodles Outer','Flexible Packaging- Noodles Tastemaker Sachets','Tissue Wrap','Wrap Around Labels- Non Adhesive','Starkist Pouch Labels','Paper Labels-Adhesive','Paper Bags','LD Shrink','PET G Shrink','Others (please state)'],
       defectTypes: ['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter'],
       products: ['Chunk Light Tuna 142g Wrap Label','Solid White Albacore 198g Label','Chunk Light 85g Wrap Label'],
       tolerances: CFG.tolerances,
@@ -116,19 +124,52 @@ function seedEquipment() {
 }
 function seedJobs() {
   return [
-    { jobNo:'SK-24817', customer:'StarKist', product:'Chunk Light Tuna 142g Wrap Label', machine:'Flexo450', description:'5-colour wrap, UV varnish', created:'2026-06-18',
-      stage1:{_done:true,date:'2026-06-18',productDescription:'Chunk Light Tuna 142g',operator:'J. Naidu',supervisor:'R. Prasad',qaOfficer:'A. Kumar',proceed:'Yes',materialType:'BOPP White 60um',thicknessGrammage:'60um / 58 gsm',batchDetails:'BP-2261',dyneLevel:'38',supplier:'Innovia',substrate:'BOPP',machineSpeed:'120',gs1Barcode:'A',printRegistration:'0.1',cofFilmMetal:'0.28',stations:[{name:'Station 1',uv:'100%',anilox:'360',teeth:'120',ink:'Cyan',batch:'C-8841',by:'JN'},{name:'Station 2',uv:'100%',anilox:'360',teeth:'120',ink:'Magenta',batch:'M-8842',by:'JN'}],comments:'Within spec.',photos:[]},
+    { jobNo:'SK-24817', customer:'StarKist', productType:'Starkist Paper Labels', itemCode:'SK-142-WR', product:'Chunk Light Tuna 142g Wrap Label', machine:'Flexo450', description:'5-colour wrap, UV varnish', created:'2026-06-18',
+      stage1:{_done:true,date:'2026-06-18',productDescription:'Chunk Light Tuna 142g',proceed:'Yes',operator:'J. Naidu',qaOfficer:'A. Kumar',supervisor:'R. Prasad',
+        materials:[{materialType:'BOPP White 60um',gauge:'60',grammage:'58',dyne:'38',supplier:'Innovia',batch:'BP-2261'}],
+        stations:[{group:0,name:'1',uvSetting:'100%',anilox:'360',cylinderTeeth:'120',inkType:'Cyan',inkBatch:'C-8841'},{group:0,name:'2',uvSetting:'100%',anilox:'360',cylinderTeeth:'120',inkType:'Magenta',inkBatch:'M-8842'}],
+        unwinderTension:'120',infeedTension:'90',outfeedTension:'95',rewindTension:'110',machineSpeed:'120',corona1:'42',corona2:'42',corona3:'',corona4:'',
+        setupText:'Pass',setupColour:'Pass',setupRegistration:'Within tolerance',setupInkAdhesion:'Pass',setupGs1:'A',setupCofFilmMetal:'0.28',setupCofFilmFilm:'0.30',setupInkScuffing:'Pass - no ink transfer',
+        approvalQa:'Proceed',approvalOperator:'Proceed',approvalSupervisor:'Proceed',
+        runningTests:[{roll:'1',text:'Pass',colour:'Pass',registration:'Within tolerance',inkAdhesion:'Pass',gs1:'A',cofFilmMetal:'0.28',cofFilmFilm:'0.30',inkScuffing:'Pass - no ink transfer',comments:'OK'}],
+        comments:'Within spec.',photos:[]},
       stage2:{_done:true,date:'2026-06-18',machineName:'AVT Inspection Machine 1',shift:'Day',operator:'S. Lal',qaOfficer:'A. Kumar',avtRef:'AVT-24817-01',rows:[{roll:'1',totalMeters:'5000',wasteIn:'40',wasteOut:'35',defect:'Hickey',weightKg:'1.1',sign:'SL'},{roll:'2',totalMeters:'5000',wasteIn:'30',wasteOut:'28',defect:'Mis-register',weightKg:'1.0',sign:'SL'}],remarks:'Cleared.',photos:[]},
-      stage3:{_done:true,date:'2026-06-19',customerItem:'StarKist / 142g Wrap',startTime:'06:10',finishTime:'10:40',operatorName:'M. Singh',rolls:[{no:'1',material:'BOPP 60um',reelWidth:'330',size:'105x148',gsm:'58',repeat:'148',totalSheets:'4200',wasteKg:'1.2',goodSheets:'4120'}],colours:'Pass',register:'Pass',barcode:'A',cuttingAccuracy:'0.2',setupHours:'0.5',dtMechanical:'0.1',operatorRemarks:'Smooth',qcRemarks:'OK',photos:[]},
+      stage3:{_done:true,date:'2026-06-19',customerItem:'StarKist / 142g Wrap',startTime:'06:10',finishTime:'10:40',operatorName:'M. Singh',qaOfficer:'A. Kumar',supervisor:'R. Prasad',
+        infeedRoll:'1',infeedMaterial:'BOPP 60um',infeedReelSize:'330',infeedGrammage:'58',infeedCuttingRepeat:'148',
+        inProcessChecks:[{time:'07:00',sheetSize:'105 x 148',repeatVariation:'0.1',printQuality:'Pass',varnishPosition:'OK',barcode:'Correct',sheetAppearance:'Good',sheetStackQuality:'Good',comments:'OK'}],
+        productionSummary:[{roll:'1',source:'FLEXO450',inputMeters:'4250',outputMeters:'4200',sheets:'4120',pallet:'P-01',comments:''}],
+        wasteRows:[{setup:'0.8',printDefects:'0.3',coreWinding:'0.1',webBreak:'0',jobChange:'0',mechanical:'0'}],
+        dtMaterial:'0',dtWinding:'0',dtReelDamage:'0',dtMechanical:'0.1',dtElectrical:'0',comments:'Smooth',photos:[]},
       stage4:{_done:false} },
-    { jobNo:'SK-24820', customer:'StarKist', product:'Solid White Albacore 198g Label', machine:'NilPeter', description:'4-colour + cold foil', created:'2026-06-19',
-      stage1:{_done:true,date:'2026-06-19',productDescription:'Albacore 198g',operator:'V. Reddy',supervisor:'R. Prasad',qaOfficer:'P. Devi',proceed:'Yes',materialType:'Paper 80gsm',gs1Barcode:'A',printRegistration:'0.1',stations:[{name:'Station 1',uv:'100%',anilox:'360',teeth:'110',ink:'Cyan',batch:'C-9001',by:'VR'}],comments:'Cold foil aligned.',photos:[]},
+    { jobNo:'SK-24820', customer:'StarKist', productType:'Starkist Paper Labels', itemCode:'SK-198-AL', product:'Solid White Albacore 198g Label', machine:'NilPeter', description:'4-colour + cold foil', created:'2026-06-19',
+      stage1:{_done:true,date:'2026-06-19',productDescription:'Albacore 198g',proceed:'Yes',operator:'V. Reddy',qaOfficer:'P. Devi',supervisor:'R. Prasad',
+        materials:[{materialType:'Paper 80gsm',gauge:'',grammage:'80',dyne:'',supplier:'APP',batch:'PP-771'}],
+        stations:[{group:0,name:'1',pressureSetPoint:'2.5',dryingTemp:'60',inkType:'Cyan',inkBatch:'C-9001',bladeAngle:'55',bladePressure:'2.0',inkViscosity:'18'},{group:1,name:'5',uvLampIntensity:'80',aniloxPressure:'1.5',platePressure:'1.2',anilox:'400',inkType:'White',inkBatch:'W-9002'}],
+        unwinderTension:'110',infeedTension:'85',outfeedTension:'90',rewindTension:'100',machineSpeed:'90',corona1:'40',corona2:'',corona3:'',corona4:'',
+        setupText:'Pass',setupColour:'Pass',setupRegistration:'Within tolerance',setupInkAdhesion:'Pass',setupGs1:'A',setupCofFilmMetal:'',setupCofFilmFilm:'',setupInkScuffing:'Pass - no ink transfer',
+        approvalQa:'Proceed',approvalOperator:'Proceed',approvalSupervisor:'Proceed',
+        runningTests:[{roll:'1',text:'Pass',colour:'Pass',registration:'Within tolerance',inkAdhesion:'Pass',gs1:'A',cofFilmMetal:'',cofFilmFilm:'',inkScuffing:'Pass - no ink transfer',comments:''}],
+        comments:'Cold foil aligned.',photos:[]},
       stage2:{_done:false}, stage3:{_done:false}, stage4:{_done:false} },
-    { jobNo:'SK-24795', customer:'StarKist', product:'Chunk Light 85g Wrap Label', machine:'BOBST', description:'Laminated wrap', created:'2026-06-15',
-      stage1:{_done:true,date:'2026-06-15',operator:'A. Chand',qaOfficer:'A. Kumar',proceed:'Yes',materialType:'BOPP/Foil laminate',gs1Barcode:'A',cofFilmMetal:'0.30',stations:[{name:'Station 1',uv:'100%',anilox:'320',teeth:'130',ink:'Adhesive',batch:'AD-220',by:'AC'}],comments:'Bond OK.',photos:[]},
+    { jobNo:'SK-24795', customer:'StarKist', productType:'Starkist Paper Labels', itemCode:'SK-85-WR', product:'Chunk Light 85g Wrap Label', machine:'BOBST', description:'Laminated wrap', created:'2026-06-15',
+      stage1:{_done:true,date:'2026-06-15',productDescription:'Chunk Light 85g Wrap',proceed:'Yes',operator:'A. Chand',qaOfficer:'A. Kumar',supervisor:'R. Prasad',
+        materials:[{materialType:'BOPP/Foil laminate',gauge:'',grammage:'',dyne:'',supplier:'Innovia',batch:'AD-220'}],
+        stations:[{group:0,name:'1',pressureSetPoint:'2.4',dryingTemp:'65',inkType:'Adhesive',inkBatch:'AD-220',bladeAngle:'55',bladePressure:'2.1',inkViscosity:'20'}],
+        unwinderTension:'130',infeedTension:'95',outfeedTension:'100',rewindTension:'120',machineSpeed:'80',corona1:'44',corona2:'',corona3:'',corona4:'',
+        setupText:'Pass',setupColour:'Pass',setupRegistration:'Within tolerance',setupInkAdhesion:'Pass',setupGs1:'A',setupCofFilmMetal:'0.30',setupCofFilmFilm:'',setupInkScuffing:'Pass - no ink transfer',
+        approvalQa:'Proceed',approvalOperator:'Proceed',approvalSupervisor:'Proceed',
+        runningTests:[{roll:'1',text:'Pass',colour:'Pass',registration:'Within tolerance',inkAdhesion:'Pass',gs1:'A',cofFilmMetal:'0.30',cofFilmFilm:'',inkScuffing:'Pass - no ink transfer',comments:''}],
+        comments:'Bond OK.',photos:[]},
       stage2:{_done:true,date:'2026-06-15',machineName:'AVT Inspection Machine 1',shift:'Day',operator:'S. Lal',qaOfficer:'A. Kumar',avtRef:'AVT-24795-01',rows:[{roll:'1',totalMeters:'6000',wasteIn:'25',wasteOut:'20',defect:'Bubble',weightKg:'1.0',sign:'SL'}],remarks:'Cleared.',photos:[]},
-      stage3:{_done:true,date:'2026-06-16',customerItem:'StarKist / 85g Wrap',startTime:'07:00',finishTime:'11:15',operatorName:'M. Singh',rolls:[{no:'1',material:'Laminate',reelWidth:'300',size:'95x130',gsm:'-',repeat:'130',totalSheets:'5200',wasteKg:'1.5',goodSheets:'5100'}],colours:'Pass',register:'Pass',barcode:'A',cuttingAccuracy:'0.2',setupHours:'0.4',operatorRemarks:'OK',qcRemarks:'OK',photos:[]},
-      stage4:{_done:true,date:'2026-06-16',productItem:'Chunk Light 85g Wrap',labelWidth:'95',labelLength:'130',shift:'Day',shiftStartFinish:'07:00 - 15:00',checks:[{time:'08:00',vals:{'Banded Bundle Checked':'Yes','Shrink-Wrapped Bundle Checked':'Yes','Packing Label Checked':'Yes','Finished Good Pallet Checked':'Yes','Label Orientation in Bundle':'Yes','Line Clearance Status':'Yes','Curling':'No','Printing Defects':'No','Cutting Defects':'No'}}],rejectedQty:'0',reasonsRejection:'-',remarks:'All checks passed.',operatorName:'R. Kumar',qcName:'A. Kumar',packersNames:'Team B',statusFinal:'Released',photos:[]},
+      stage3:{_done:true,date:'2026-06-16',customerItem:'StarKist / 85g Wrap',startTime:'07:00',finishTime:'11:15',operatorName:'M. Singh',qaOfficer:'A. Kumar',supervisor:'R. Prasad',
+        infeedRoll:'1',infeedMaterial:'Laminate',infeedReelSize:'300',infeedGrammage:'-',infeedCuttingRepeat:'130',
+        inProcessChecks:[{time:'08:00',sheetSize:'95 x 130',repeatVariation:'0.2',printQuality:'Pass',varnishPosition:'OK',barcode:'Correct',sheetAppearance:'Good',sheetStackQuality:'Good',comments:'OK'}],
+        productionSummary:[{roll:'1',source:'BOBST',inputMeters:'5300',outputMeters:'5200',sheets:'5100',pallet:'P-02',comments:''}],
+        wasteRows:[{setup:'0.9',printDefects:'0.4',coreWinding:'0.2',webBreak:'0',jobChange:'0',mechanical:'0'}],
+        dtMaterial:'0',dtWinding:'0',dtReelDamage:'0',dtMechanical:'0',dtElectrical:'0',comments:'OK',photos:[]},
+      stage4:{_done:true,date:'2026-06-16',productItem:'Chunk Light 85g Wrap',shift:'Day',shiftStartFinish:'07:00 - 15:00',labelWidth:'95',labelLength:'130',labelThickness:'60',
+        checks:[{time:'08:00',vals:{'Barcode':'Correct','Product Code':'SK-85-WR','Label Width (mm)':'95','Label Height (mm)':'130','Print Quality':'Pass','Cutting Quality':'Pass','Physical Appearance':'Flat','Label Orientation in Bundle':'Correct','Bundle Quantity':'Pass','Shrink Wrap Quality':'Tight','Outer Labels Verified':'Correct','Comments':'All good'}}],
+        quantityOnHold:'0',reasonForRejection:'',disposition:'',unwantedMaterialsRemoved:'Yes',nextShiftQaHandover:'Communicated',remarks:'All checks passed.',photos:[]},
       statusOverride:'Released' }
   ];
 }
@@ -173,6 +214,11 @@ function verifyAuditChain(){
 }
 function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
 function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<4?'In Progress':'Released'); }
+/* Total Stage-3 waste (kg) from the Production Waste Summary rows (legacy fallback: rolls[].wasteKg). */
+function stage3WasteKg(s3){ s3=s3||{};
+  let w=(s3.wasteRows||[]).reduce((a,r)=>a+['setup','printDefects','coreWinding','webBreak','jobChange','mechanical'].reduce((x,k)=>x+(parseFloat(r&&r[k])||0),0),0);
+  if(!w) w=(s3.rolls||[]).reduce((a,r)=>a+(parseFloat(r&&r.wasteKg)||0),0);
+  return w; }
 function canManageUsers(u){ return !!u && (u.role==='Administrator' || u.role==='Quality Manager'); }
 function isManager(u){ return !!u && ['Supervisor','Quality Manager','Administrator'].includes(u.role); }
 
@@ -214,14 +260,16 @@ function loginClear(key){ LOGIN_FAILS.delete(key); }
 
 /* Required fields enforced when a stage is marked complete (mirrored on the client). */
 const STAGE_REQUIRED = {
-  '1': [['date','Date'],['qaOfficer','QA Officer'],['proceed','Proceed With Job'],['materialType','Material Type']],
+  '1': [['date','Date'],['qaOfficer','QA Officer'],['proceed','Proceed With Job']],
   '2': [['date','Date'],['qaOfficer','QA Officer']],
   '3': [['date','Date'],['operatorName','Operator'],['startTime','Start Time'],['finishTime','Finish Time']],
-  '4': [['date','Date'],['qcName','QC Name'],['statusFinal','Final Release Decision']]
+  '4': [['date','Date']]
 };
 function validateComplete(n, d){
   const miss = [];
   (STAGE_REQUIRED[n]||[]).forEach(([k,l])=>{ if(!String((d&&d[k])||'').trim()) miss.push(l); });
+  // Stage 1 raw materials are a repeating table; accept the legacy scalar too for older drafts/imports.
+  if(n==='1' && !((d.materials||[]).some(m=>String((m&&m.materialType)||'').trim()) || String((d&&d.materialType)||'').trim())) miss.push('Material Type');
   if(n==='2' && !((d.rows||[]).some(r=>String(r.totalMeters||'').trim()||String(r.defect||'').trim()))) miss.push('At least one reel row');
   if(n==='4'){
     if(!((d.checks||[]).some(c=>String(c.time||'').trim()))) miss.push('At least one hourly check');
@@ -310,7 +358,7 @@ async function api(req, res, url) {
     const b = await readBody(req);
     if(!b.jobNo||!b.machine) return send(res,400,{error:'jobNo and machine required'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===b.jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
-    const job={ jobNo:b.jobNo, machine:b.machine, customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
+    const job={ jobNo:b.jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     DB.jobs.unshift(job); audit(user,'create-job',job.jobNo); saveDB(); return send(res,200,job);
   }
   if (seg[0]==='jobs' && seg[1] && seg[2]==='clone' && method==='POST') {
@@ -319,7 +367,7 @@ async function api(req, res, url) {
     const b=await readBody(req); const newNo=String(b.jobNo||'').trim();
     if(!newNo) return send(res,400,{error:'New Job # required'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===newNo.toLowerCase())) return send(res,409,{error:'A job with that number already exists'});
-    const job={ jobNo:newNo, machine:src.machine, customer:src.customer, product:src.product, description:src.description, created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
+    const job={ jobNo:newNo, machine:src.machine, productType:src.productType||'', itemCode:src.itemCode||'', customer:src.customer, product:src.product, description:src.description, created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     DB.jobs.unshift(job); audit(user,'clone-job',newNo,'from '+src.jobNo); saveDB(); return send(res,200,job);
   }
   if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='PUT') {
@@ -327,7 +375,7 @@ async function api(req, res, url) {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
     const b=await readBody(req);
-    ['customer','product','description'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
+    ['customer','product','description','productType','itemCode'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
     if(b.machine && DB.masterdata.machines[b.machine] && completedStages(j)===0) j.machine=b.machine;
     audit(user,'edit-job',j.jobNo); saveDB(); return send(res,200,j);
   }
@@ -350,13 +398,27 @@ async function api(req, res, url) {
         return send(res,403,{error:'You are not qualified to sign off Stage '+n+'. Ask an administrator to add this stage to your competencies.'});
     }
     j['stage'+n] = b.data || {};
-    if(n==='4' && b.data && b.data._done && b.data.statusFinal){ j.statusOverride = b.data.statusFinal==='Released'?'Released':'Hold'; if(j.statusOverride!=='Released'){ alertAll('Job '+j.jobNo+' set to '+j.statusOverride,'Stage 4 decision: '+b.data.statusFinal+' (qty '+(b.data.rejectedQty||'?')+')'); } fireEvent(j.statusOverride==='Released'?'job.released':'job.hold',{ jobNo:j.jobNo, product:j.product, decision:b.data.statusFinal }); }
+    if(n==='4' && b.data && b.data._done){
+      // Per QA spec, Stage 4 no longer carries a "Final Release Decision". A job is Released
+      // once all four stages are complete (jobStatus default). The Line Clearance section only
+      // records the on-hold quantity and its disposition (Re-work / Dump); an explicit Hold is
+      // still raised via the Hold button.
+      if(jobStatus(j)==='Released') fireEvent('job.released',{ jobNo:j.jobNo, product:j.product });
+      const onHold=parseFloat(b.data.quantityOnHold||'')||0;
+      if(onHold>0){ alertAll('Job '+j.jobNo+': '+onHold+' units on hold at line clearance','Disposition: '+(b.data.disposition||'?')+' — '+(b.data.reasonForRejection||'')); fireEvent('job.hold',{ jobNo:j.jobNo, product:j.product, qty:onHold, disposition:b.data.disposition||'' }); }
+    }
     audit(user,'save-stage'+n,j.jobNo, b.data&&b.data._done?'completed':'draft'); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[2]==='hold' && method==='POST') {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'}); const b=await readBody(req);
     j.statusOverride='Hold'; audit(user,'hold',j.jobNo,b.reason||''); alertAll('Job '+j.jobNo+' placed on HOLD', (b.reason||'')+' by '+user.name); fireEvent('job.hold',{ jobNo:j.jobNo, reason:b.reason||'', by:user.id }); saveDB(); return send(res,200,j);
+  }
+  if (seg[0]==='jobs' && seg[2]==='release' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can clear a hold'});
+    const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
+    if(!j) return send(res,404,{error:'Job not found'}); const b=await readBody(req);
+    delete j.statusOverride; audit(user,'release',j.jobNo,b.reason||'hold cleared'); if(jobStatus(j)==='Released') fireEvent('job.released',{ jobNo:j.jobNo, product:j.product }); saveDB(); return send(res,200,j);
   }
 
   if (seg[0]==='upload' && method==='POST') { // {dataUrl, name}
@@ -591,12 +653,12 @@ async function api(req, res, url) {
 
   if (seg[0]==='export' && seg[1]==='jobs.csv' && method==='GET') {
     const ml=m=>(DB.masterdata.machines && DB.masterdata.machines[m] && DB.masterdata.machines[m].label) || m;
-    const lines=[['Job #','Customer','Product','Machine','Created','Status','Stages Complete','S1 Date','S1 QA Officer','S1 Proceed','S2 Date','S3 Date','S4 Date','S4 Decision','S4 Rejected Qty','S4 QC']];
+    const lines=[['Job #','Customer','Product','Machine','Created','Status','Stages Complete','S1 Date','S1 QA Officer','S1 Proceed','S2 Date','S3 Date','S4 Date','S4 Disposition','S4 Qty On-Hold','S4 Handover']];
     DB.jobs.forEach(j=>{ const s1=j.stage1||{}, s2=j.stage2||{}, s3=j.stage3||{}, s4=j.stage4||{};
       lines.push([ j.jobNo, j.customer, j.product, ml(j.machine), j.created, jobStatus(j), completedStages(j),
         s1._done?s1.date:'', s1._done?s1.qaOfficer:'', s1._done?s1.proceed:'',
         s2._done?s2.date:'', s3._done?s3.date:'', s4._done?s4.date:'',
-        s4._done?(s4.statusFinal||''):'', s4._done?(s4.rejectedQty||''):'', s4._done?(s4.qcName||''):'' ]); });
+        s4._done?(s4.disposition||''):'', s4._done?(s4.quantityOnHold||''):'', s4._done?(s4.nextShiftQaHandover||''):'' ]); });
     const csv='﻿'+lines.map(r=>r.map(csvCell).join(',')).join('\r\n');
     audit(user,'export-csv','', DB.jobs.length+' jobs');
     res.writeHead(200,{ 'Content-Type':'text/csv; charset=utf-8', 'Content-Disposition':'attachment; filename="golden-qa-jobs.csv"', 'Cache-Control':'no-store' });
@@ -621,15 +683,15 @@ function analytics(opts){
   const inRange=j=>{ const d=j.created||''; if(from && d<from) return false; if(to && d>to) return false; return true; };
   const inShift=j=>{ if(!shift) return true; return [j.stage2&&j.stage2.shift, j.stage4&&j.stage4.shift].some(s=>String(s||'').toLowerCase()===shift.toLowerCase()); };
   const jobs=DB.jobs.filter(j=>inRange(j)&&inShift(j));
-  const defects={}, wasteByMachine={}, downtime={Setup:0,Material:0,Windup:0,Damage:0,Mechanical:0,Electrical:0,Others:0}, trendMap={};
+  const defects={}, wasteByMachine={}, downtime={Material:0,Winding:0,'Reel Damage':0,Mechanical:0,Electrical:0}, trendMap={};
   let released=0, total=jobs.length, rejectedJobs=0;
   jobs.forEach(j=>{
     const st=jobStatus(j);
     if(st==='Released') released++;
     const s2=j.stage2||{}; (s2.rows||[]).forEach(r=>{ if(r.defect){ defects[r.defect]=(defects[r.defect]||0)+(parseFloat(r.weightKg)||0.0); } });
-    const s3=j.stage3||{}; const w=(s3.rolls||[]).reduce((a,r)=>a+(parseFloat(r.wasteKg)||0),0); wasteByMachine[j.machine]=(wasteByMachine[j.machine]||0)+w;
-    downtime.Setup+=parseFloat(s3.setupHours)||0; downtime.Material+=parseFloat(s3.dtMaterial)||0; downtime.Windup+=parseFloat(s3.dtWindup)||0; downtime.Damage+=parseFloat(s3.dtDamage)||0; downtime.Mechanical+=parseFloat(s3.dtMechanical)||0; downtime.Electrical+=parseFloat(s3.dtElectrical)||0; downtime.Others+=parseFloat(s3.dtOthers)||0;
-    const s4=j.stage4||{}; if(s4.statusFinal && s4.statusFinal!=='Released') rejectedJobs++;
+    const s3=j.stage3||{}; const w=stage3WasteKg(s3); const mk=j.machine||'(unspecified)'; wasteByMachine[mk]=(wasteByMachine[mk]||0)+w;
+    downtime.Material+=parseFloat(s3.dtMaterial)||0; downtime.Winding+=parseFloat(s3.dtWinding)||0; downtime['Reel Damage']+=parseFloat(s3.dtReelDamage)||0; downtime.Mechanical+=parseFloat(s3.dtMechanical)||0; downtime.Electrical+=parseFloat(s3.dtElectrical)||0;
+    if(st==='Hold'||st==='Rejected') rejectedJobs++;
     const day=j.created||'unknown'; const t=trendMap[day]||(trendMap[day]={date:day,jobs:0,released:0,held:0}); t.jobs++; if(st==='Released')t.released++; if(st==='Hold'||st==='Rejected')t.held++;
   });
   const fpy = total? Math.round((released/total)*100):0;
@@ -686,11 +748,16 @@ function round(x,d){ d=(d==null?3:d); const m=Math.pow(10,d); return Math.round(
 /* SPC: control chart + capability (Cp/Cpk) for a Stage-1 numeric variable. */
 function spc(param){
   const tol=(DB.masterdata&&DB.masterdata.tolerances)||{};
-  const defs={ cof:{ key:'cofFilmMetal', lsl:Number(tol.cofMin), usl:Number(tol.cofMax), label:'COF (film to metal)' },
-               registration:{ key:'printRegistration', lsl:0, usl:Number(tol.registrationMaxMm), label:'Print registration (mm)' } };
+  // COF readings now live in the set-up test (setupCofFilmMetal) and per-roll running tests
+  // (runningTests[].cofFilmMetal). Print registration became a categorical set-up check
+  // (Within tolerance / Fail), so it no longer yields a numeric SPC series.
+  const defs={ cof:{ lsl:Number(tol.cofMin), usl:Number(tol.cofMax), label:'COF (film to metal)',
+                 values:s1=>[s1.setupCofFilmMetal, ...((s1.runningTests||[]).map(r=>r&&r.cofFilmMetal))] },
+               registration:{ lsl:0, usl:Number(tol.registrationMaxMm), label:'Print registration (mm)',
+                 values:()=>[] } };
   const def=defs[param]||defs.cof;
   const points=[];
-  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const v=parseFloat(s1[def.key]); if(!isNaN(v)) points.push({ jobNo:j.jobNo, date:s1.date||j.created, value:v }); });
+  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; (def.values(s1)||[]).forEach(raw=>{ const v=parseFloat(raw); if(!isNaN(v)) points.push({ jobNo:j.jobNo, date:s1.date||j.created, value:v }); }); });
   points.sort((a,b)=> (a.date<b.date?-1:1));
   const vals=points.map(p=>p.value); const n=vals.length;
   const mean=n?vals.reduce((a,b)=>a+b,0)/n:0;
@@ -705,11 +772,11 @@ function spc(param){
 /* Supplier scorecards from the Stage-1 supplier field. */
 function suppliers(){
   const map={};
-  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const sup=(String(s1.supplier||'').trim())||'(unspecified)';
+  DB.jobs.forEach(j=>{ const s1=j.stage1||{}; const mats=s1.materials||[]; const sup=(String((mats[0]&&mats[0].supplier)||s1.supplier||'').trim())||'(unspecified)';
     const m=map[sup]||(map[sup]={ supplier:sup, jobs:0, released:0, holdReject:0, defectKg:0, wasteKg:0 });
     m.jobs++; const st=jobStatus(j); if(st==='Released')m.released++; if(st==='Hold'||st==='Rejected')m.holdReject++;
     (((j.stage2||{}).rows)||[]).forEach(r=>{ if(r.defect) m.defectKg+=parseFloat(r.weightKg)||0; });
-    (((j.stage3||{}).rolls)||[]).forEach(r=>{ m.wasteKg+=parseFloat(r.wasteKg)||0; });
+    m.wasteKg+=stage3WasteKg(j.stage3);
   });
   return Object.values(map).map(m=>({ supplier:m.supplier, jobs:m.jobs, released:m.released, holdReject:m.holdReject, defectKg:round(m.defectKg,2), wasteKg:round(m.wasteKg,2), fpy:m.jobs?Math.round(m.released/m.jobs*100):0 })).sort((a,b)=>b.jobs-a.jobs);
 }
@@ -723,14 +790,14 @@ function xlsSheet(name, header, rows){
 }
 function workbookXls(){
   const ml=m=>(DB.masterdata.machines&&DB.masterdata.machines[m]&&DB.masterdata.machines[m].label)||m;
-  const jobs=DB.jobs.map(j=>{ const s4=j.stage4||{}; return [j.jobNo, j.customer||'', j.product||'', ml(j.machine), j.created||'', jobStatus(j), completedStages(j), s4._done?(s4.statusFinal||''):'', s4._done?(s4.qcName||''):'']; });
+  const jobs=DB.jobs.map(j=>{ const s4=j.stage4||{}; return [j.jobNo, j.customer||'', j.product||'', ml(j.machine), j.created||'', jobStatus(j), completedStages(j), s4._done?(s4.disposition||''):'', s4._done?(s4.quantityOnHold||''):'']; });
   const capas=(DB.capas||[]).map(c=>[c.id, c.jobNo||'', c.title||'', c.severity||'', c.status||'', c.owner||'', c.dueDate||'', c.effectiveness||'']);
   const equip=(DB.equipment||[]).map(equipView).map(e=>[e.id, e.name||'', e.type||'', e.machine||'', e.calibratedOn||'', e.nextDue||'', e.calStatus]);
   const sup=suppliers().map(s=>[s.supplier, s.jobs, s.released, s.holdReject, s.fpy, s.defectKg, s.wasteKg]);
   return '<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'+
     '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'+
     '<Styles><Style ss:ID="hdr"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0E2A47" ss:Pattern="Solid"/></Style></Styles>'+
-    xlsSheet('Jobs',['Job #','Customer','Product','Machine','Created','Status','Stages','S4 Decision','S4 QC'],jobs)+
+    xlsSheet('Jobs',['Job #','Customer','Product','Machine','Created','Status','Stages','S4 Disposition','S4 Qty On-Hold'],jobs)+
     xlsSheet('CAPAs',['CAPA','Job','Title','Severity','Status','Owner','Due','Effectiveness'],capas)+
     xlsSheet('Equipment',['ID','Name','Type','Machine','Last cal.','Next due','Status'],equip)+
     xlsSheet('Suppliers',['Supplier','Jobs','Released','Hold/Rej','FPY %','Defect kg','Waste kg'],sup)+
