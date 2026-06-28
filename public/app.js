@@ -1,5 +1,5 @@
 "use strict";
-/* Golden QA - Starkist Label Inspection (tablet-first PWA front-end) */
+/* GOLDEN Labels & Flexible QA (tablet-first PWA front-end) */
 
 const YN = ["","Yes","No","N/A"];
 /* option sets (QA spec) */

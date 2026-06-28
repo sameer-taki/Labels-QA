@@ -1,7 +1,7 @@
 {
-  "name": "Golden QA - Starkist Label Inspection",
+  "name": "GOLDEN Labels & Flexible QA",
   "short_name": "Golden QA",
-  "description": "In-process quality inspection for Starkist labels",
+  "description": "In-process quality inspection for labels and flexible packaging",
   "start_url": "./",
   "display": "standalone",
   "orientation": "any",
