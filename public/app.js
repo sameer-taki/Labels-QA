@@ -933,6 +933,7 @@ async function settings(){
     <h3>Competency control</h3>
     <label style="text-transform:none;font-weight:600;display:flex;align-items:center;gap:10px;max-width:760px"><input type="checkbox" id="cmp_enf" ${md.competencyEnforced?'checked':''} style="width:auto;min-height:0">Enforce operator competency — block a stage sign-off unless the signer is qualified for that stage (set per user in Team &amp; Access; Administrators bypass).</label>
     <div class="row-actions"><button class="btn gold sm" onclick="saveCompetency()">Save</button></div>
+    <h3>Product types</h3><p class="sub" style="margin:2px 0 6px">One per line. These populate the <b>Product Type</b> dropdown when starting a new job.</p><textarea id="a_pt" style="min-height:150px">${esc((md.productTypes||[]).join("\n"))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveProducts()">Save product types</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
     <h3>Backups &amp; storage</h3><div class="kv">
       <div><span>Storage driver</span><b>${esc(health?health.storage:'?')}</b></div>
@@ -996,6 +997,7 @@ async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role")
 async function delUser(id){ if(!confirm("Remove user '"+id+"'? This cannot be undone.")) return; try{ await api("/api/admin/users/"+encodeURIComponent(id),{method:"DELETE"}); toast("User removed"); team(); }catch(e){ toast(e.message); } }
 async function saveTol(){ MD.tolerances=Object.assign(MD.tolerances,{cofMin:parseFloat(val("t_cofMin")),cofMax:parseFloat(val("t_cofMax")),registrationMaxMm:parseFloat(val("t_reg")),barcodeMinGrade:val("t_bc")}); await api("/api/masterdata",{method:"PUT",body:{tolerances:MD.tolerances}}); toast("Tolerances saved"); }
 async function saveDefects(){ MD.defectTypes=val("a_def").split(",").map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{defectTypes:MD.defectTypes}}); toast("Defect list saved"); }
+async function saveProducts(){ MD.productTypes=val("a_pt").split(/\r?\n/).map(s=>s.trim()).filter(Boolean); await api("/api/masterdata",{method:"PUT",body:{productTypes:MD.productTypes}}); toast("Product types saved"); }
 
 /* register SW + boot */
 function showUpdateBanner(){ if(document.getElementById("updBanner"))return; const d=document.createElement("div"); d.id="updBanner"; d.className="upd-banner no-print"; d.innerHTML=`<span>A new version is available.</span><button class="btn gold sm" onclick="location.reload()">Reload</button>`; document.body.appendChild(d); }

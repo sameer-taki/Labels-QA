@@ -53,7 +53,10 @@ async function loadDB() {
   if (!DB.masterdata) DB.masterdata = {};
   if (!DB.masterdata.targets) DB.masterdata.targets = { fpyMin: 95, openCapasMax: 5, overdueCalMax: 0, holdRejectMax: 2 };
   if (typeof DB.masterdata.competencyEnforced !== 'boolean') DB.masterdata.competencyEnforced = false;
+  // backfill master-data added after this DB was created (product types, machine station schemas)
+  const mdChanged = migrateMasterdata();
   (DB.users || []).forEach(u => { if (!Array.isArray(u.qualifiedStages)) u.qualifiedStages = []; });
+  if (mdChanged) { try { await STORAGE.save(DB); } catch(e) {} }
 }
 let _saveChain = Promise.resolve();
 function saveDB() { _saveChain = _saveChain.then(() => STORAGE.save(DB)).catch(e => console.error('saveDB failed:', e && e.message)); return _saveChain; }
@@ -61,6 +64,33 @@ function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toStr
 function checkPw(u, pw) { if (!u || !u.passHash) return false; const h = hashPw(pw, u.salt); return h.length === u.passHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(u.passHash)); }
 function mkUser(id, name, role, pw, qs) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt), qualifiedStages: Array.isArray(qs) ? qs : [] }; }
 
+/* Canonical master-data defaults (shared by seedDB and the migration backfill). */
+const DEFAULT_PRODUCT_TYPES = ['Pressure Sensitive Adhesive Labels','Starkist Paper Labels','Flexible Packaging- Noodles Inner','Flexible Packaging- Noodles Outer','Flexible Packaging- Noodles Tastemaker Sachets','Tissue Wrap','Wrap Around Labels- Non Adhesive','Starkist Pouch Labels','Paper Labels-Adhesive','Paper Bags','LD Shrink','PET G Shrink','Others (please state)'];
+function defaultMachines(){
+  const GRAVURE_COLS=[{key:'pressureSetPoint',label:'Pressure Set Point'},{key:'dryingTemp',label:'Drying Temp (°C)'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'},{key:'bladeAngle',label:'Blade Angle'},{key:'bladePressure',label:'Blade Pressure'},{key:'inkViscosity',label:'Ink Viscosity'}];
+  const UVFLEXO_COLS=[{key:'uvLampIntensity',label:'UV Lamp Intensity (%)'},{key:'aniloxPressure',label:'Anilox Pressure'},{key:'platePressure',label:'Plate Pressure'},{key:'anilox',label:'Anilox #'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
+  const FLEXO_COLS=[{key:'uvSetting',label:'UV Setting'},{key:'anilox',label:'Anilox #'},{key:'cylinderTeeth',label:'Cylinder Teeth'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
+  return {
+    Flexo450: { form: 'F-040-A', label: 'Flexo 450', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8','Station 9'],
+      stationGroups:[{ title:'Flexo Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:FLEXO_COLS }] },
+    NilPeter: { form: 'F-016-E', label: 'NilPeter', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8'],
+      stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','11'], cols:GRAVURE_COLS },{ title:'UV Flexo Stations', stations:['5','6','7','8','9','10'], cols:UVFLEXO_COLS }] },
+    BOBST: { form: 'F-027-A', label: 'BOBST (Lamination)', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'],
+      stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:GRAVURE_COLS }] }
+  };
+}
+/* Backfill new master-data fields into a database created before they existed.
+   Only fills what's missing — never overwrites a manager's customised values. Returns true if changed. */
+function migrateMasterdata(){
+  if(!DB.masterdata) DB.masterdata={};
+  const md=DB.masterdata; let changed=false;
+  if(!Array.isArray(md.productTypes) || !md.productTypes.length){ md.productTypes=DEFAULT_PRODUCT_TYPES.slice(); changed=true; }
+  const dm=defaultMachines();
+  if(!md.machines){ md.machines=dm; changed=true; }
+  else Object.keys(dm).forEach(k=>{ if(!md.machines[k]){ md.machines[k]=dm[k]; changed=true; } else if(!Array.isArray(md.machines[k].stationGroups)){ md.machines[k].stationGroups=dm[k].stationGroups; changed=true; } });
+  if(!Array.isArray(md.defectTypes)){ md.defectTypes=['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter']; changed=true; }
+  return changed;
+}
 function seedDB() {
   const adminUser = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
   const adminPass = process.env.ADMIN_PASSWORD || '';
@@ -73,22 +103,11 @@ function seedDB() {
         mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123', [1,2,3,4]),
         mkUser('ateet', 'Ateet Roshan', 'Quality Manager', 'ateet123', [1,2,3,4]),
         mkUser('admin', 'Administrator', 'Administrator', 'admin123', [1,2,3,4]) ];
-  // Machine-specific print-station column schemas (per QA spec).
-  const GRAVURE_COLS=[{key:'pressureSetPoint',label:'Pressure Set Point'},{key:'dryingTemp',label:'Drying Temp (°C)'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'},{key:'bladeAngle',label:'Blade Angle'},{key:'bladePressure',label:'Blade Pressure'},{key:'inkViscosity',label:'Ink Viscosity'}];
-  const UVFLEXO_COLS=[{key:'uvLampIntensity',label:'UV Lamp Intensity (%)'},{key:'aniloxPressure',label:'Anilox Pressure'},{key:'platePressure',label:'Plate Pressure'},{key:'anilox',label:'Anilox #'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
-  const FLEXO_COLS=[{key:'uvSetting',label:'UV Setting'},{key:'anilox',label:'Anilox #'},{key:'cylinderTeeth',label:'Cylinder Teeth'},{key:'inkType',label:'Ink Type'},{key:'inkBatch',label:'Ink Batch#'}];
   return {
     users,
     masterdata: {
-      machines: {
-        Flexo450: { form: 'F-040-A', label: 'Flexo 450', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8','Station 9'],
-          stationGroups:[{ title:'Flexo Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:FLEXO_COLS }] },
-        NilPeter: { form: 'F-016-E', label: 'NilPeter', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8'],
-          stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','11'], cols:GRAVURE_COLS },{ title:'UV Flexo Stations', stations:['5','6','7','8','9','10'], cols:UVFLEXO_COLS }] },
-        BOBST: { form: 'F-027-A', label: 'BOBST (Lamination)', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'],
-          stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:GRAVURE_COLS }] }
-      },
-      productTypes: ['Pressure Sensitive Adhesive Labels','Starkist Paper Labels','Flexible Packaging- Noodles Inner','Flexible Packaging- Noodles Outer','Flexible Packaging- Noodles Tastemaker Sachets','Tissue Wrap','Wrap Around Labels- Non Adhesive','Starkist Pouch Labels','Paper Labels-Adhesive','Paper Bags','LD Shrink','PET G Shrink','Others (please state)'],
+      machines: defaultMachines(),
+      productTypes: DEFAULT_PRODUCT_TYPES.slice(),
       defectTypes: ['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter'],
       products: ['Chunk Light Tuna 142g Wrap Label','Solid White Albacore 198g Label','Chunk Light 85g Wrap Label'],
       tolerances: CFG.tolerances,
