@@ -45,6 +45,7 @@ async function loadDB() {
   if (!Array.isArray(DB.capas)) DB.capas = [];
   if (!Array.isArray(DB.ncrs)) DB.ncrs = [];
   if (!Array.isArray(DB.equipment)) DB.equipment = [];
+  if (!Array.isArray(DB.templates)) DB.templates = [];
   if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
   if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
   if (!Array.isArray(DB.audit)) DB.audit = [];
@@ -98,6 +99,7 @@ function seedDB() {
     capas: adminPass ? [] : seedCapas(),
     ncrs: adminPass ? [] : seedNcrs(),
     equipment: adminPass ? [] : seedEquipment(),
+    templates: adminPass ? [] : seedTemplates(),
     apikeys: [],
     webhooks: [],
     audit: [ (function(){ const e={ ts:new Date().toISOString(), user:'system', action:'seed', jobNo:'', detail:'Database initialised' }; e.hash=auditHash('', e); return e; })() ],
@@ -173,6 +175,18 @@ function seedJobs() {
       statusOverride:'Released' }
   ];
 }
+function seedTemplates(){ const now='2026-06-20T00:00:00.000Z';
+  return [
+    { id:'TPL-BOBST', name:'BOBST · Laminated wrap', machine:'BOBST', productType:'', createdBy:'ateet', createdAt:now, updatedAt:now,
+      settings:{ unwinderTension:'130', infeedTension:'95', outfeedTension:'100', rewindTension:'120', machineSpeed:'80', corona1:'44', corona2:'', corona3:'', corona4:'',
+        materials:[{materialType:'BOPP/Foil laminate',gauge:'',grammage:'',dyne:'38',supplier:'Innovia',batch:''}],
+        stations:[{group:0,name:'1',pressureSetPoint:'2.4',dryingTemp:'65',inkType:'',inkBatch:'',bladeAngle:'55',bladePressure:'2.1',inkViscosity:'20'}] } },
+    { id:'TPL-FLEXO-PAPER', name:'Flexo 450 · Starkist Paper Labels', machine:'Flexo450', productType:'Starkist Paper Labels', createdBy:'ateet', createdAt:now, updatedAt:now,
+      settings:{ unwinderTension:'120', infeedTension:'90', outfeedTension:'95', rewindTension:'110', machineSpeed:'120', corona1:'42', corona2:'42', corona3:'', corona4:'',
+        materials:[{materialType:'BOPP White 60um',gauge:'60',grammage:'58',dyne:'38',supplier:'Innovia',batch:''}],
+        stations:[{group:0,name:'1',uvSetting:'100%',anilox:'360',cylinderTeeth:'120',inkType:'',inkBatch:''}] } }
+  ];
+}
 
 /* ---------- helpers ---------- */
 /* Stateless signed session tokens (HMAC). No server-side session store, so logins
@@ -214,6 +228,31 @@ function verifyAuditChain(){
 }
 function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
 function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<4?'In Progress':'Released'); }
+/* Stage-1 setup-template support: machine/product-keyed default settings. */
+const TEMPLATE_SETTING_KEYS=['unwinderTension','infeedTension','outfeedTension','rewindTension','machineSpeed','corona1','corona2','corona3','corona4'];
+function cleanTemplate(b){ const machines=(DB.masterdata&&DB.masterdata.machines)||{}; const pts=(DB.masterdata&&DB.masterdata.productTypes)||[];
+  const machine=(b.machine&&machines[b.machine])?b.machine:''; const productType=pts.includes(b.productType)?b.productType:'';
+  const s=b.settings||{}; const settings={};
+  TEMPLATE_SETTING_KEYS.forEach(k=>{ settings[k]=String(s[k]==null?'':s[k]); });
+  settings.materials=Array.isArray(s.materials)?s.materials.map(m=>({materialType:String((m&&m.materialType)||''),gauge:String((m&&m.gauge)||''),grammage:String((m&&m.grammage)||''),dyne:String((m&&m.dyne)||''),supplier:String((m&&m.supplier)||''),batch:String((m&&m.batch)||'')})):[];
+  settings.stations=Array.isArray(s.stations)?s.stations.map(x=>{ const o={group:Number(x&&x.group)||0,name:String((x&&x.name)||'')}; Object.keys(x||{}).forEach(k=>{ if(k!=='group'&&k!=='name') o[k]=String(x[k]==null?'':x[k]); }); return o; }):[];
+  return { name:String(b.name||'').trim(), machine, productType, settings };
+}
+/* Most specific template whose (machine, productType) keys match the job (empty key = wildcard). */
+function bestTemplate(machine, productType){
+  const cands=(DB.templates||[]).filter(t=>(!t.machine||t.machine===machine)&&(!t.productType||t.productType===productType));
+  if(!cands.length) return null;
+  cands.sort((a,b)=>{ const sa=(a.machine?1:0)+(a.productType?1:0), sb=(b.machine?1:0)+(b.productType?1:0); if(sb!==sa) return sb-sa; return String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')); });
+  return cands[0];
+}
+function applyTemplateToJob(job){ const t=bestTemplate(job.machine, job.productType); if(!t) return;
+  const s=t.settings||{}; const st={_done:false};
+  TEMPLATE_SETTING_KEYS.forEach(k=>{ if(s[k]!=null && s[k]!=='') st[k]=s[k]; });
+  if(Array.isArray(s.materials)&&s.materials.length) st.materials=JSON.parse(JSON.stringify(s.materials));
+  // station defaults only carry over when the template targets this exact press (column schema matches)
+  if(t.machine && t.machine===job.machine && Array.isArray(s.stations) && s.stations.length) st.stations=JSON.parse(JSON.stringify(s.stations));
+  job.stage1=st; job.templateApplied=t.name;
+}
 /* Total Stage-3 waste (kg) from the Production Waste Summary rows (legacy fallback: rolls[].wasteKg). */
 function stage3WasteKg(s3){ s3=s3||{};
   let w=(s3.wasteRows||[]).reduce((a,r)=>a+['setup','printDefects','coreWinding','webBreak','jobChange','mechanical'].reduce((x,k)=>x+(parseFloat(r&&r[k])||0),0),0);
@@ -359,7 +398,8 @@ async function api(req, res, url) {
     if(!b.jobNo||!b.machine) return send(res,400,{error:'jobNo and machine required'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===b.jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
     const job={ jobNo:b.jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
-    DB.jobs.unshift(job); audit(user,'create-job',job.jobNo); saveDB(); return send(res,200,job);
+    applyTemplateToJob(job); // pre-fill Stage 1 defaults from the best-matching press/product template
+    DB.jobs.unshift(job); audit(user,'create-job',job.jobNo, job.templateApplied?('template: '+job.templateApplied):''); saveDB(); return send(res,200,job);
   }
   if (seg[0]==='jobs' && seg[1] && seg[2]==='clone' && method==='POST') {
     const src = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
@@ -631,6 +671,29 @@ async function api(req, res, url) {
     if(typeof b.active==='boolean') e.active=b.active;
     e.updatedAt=new Date().toISOString();
     audit(user,'equip-update','',e.id); saveDB(); return send(res,200,equipView(e));
+  }
+
+  if (seg[0]==='templates' && method==='GET' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    return send(res,200, DB.templates||[]);
+  }
+  if (seg[0]==='templates' && method==='POST' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
+    const c=cleanTemplate(await readBody(req)); if(!c.name) return send(res,400,{error:'Template name is required'});
+    const now=new Date().toISOString();
+    const t=Object.assign({ id:'TPL-'+Date.now().toString(36).toUpperCase(), createdBy:user.id, createdAt:now, updatedAt:now }, c);
+    DB.templates.push(t); audit(user,'template-add','',t.id+': '+t.name); saveDB(); return send(res,200,t);
+  }
+  if (seg[0]==='templates' && seg[1] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
+    const t=(DB.templates||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!t) return send(res,404,{error:'Template not found'});
+    const c=cleanTemplate(await readBody(req)); if(!c.name) return send(res,400,{error:'Template name is required'});
+    Object.assign(t, c, { updatedAt:new Date().toISOString() }); audit(user,'template-update','',t.id); saveDB(); return send(res,200,t);
+  }
+  if (seg[0]==='templates' && seg[1] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
+    const i=(DB.templates||[]).findIndex(x=>x.id===decodeURIComponent(seg[1])); if(i<0) return send(res,404,{error:'Template not found'});
+    const removed=DB.templates.splice(i,1)[0]; audit(user,'template-delete','',removed.id); saveDB(); return send(res,200,{ ok:true });
   }
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }

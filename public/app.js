@@ -45,6 +45,7 @@ const NAV = [
   { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"ncr",label:"NCR",icon:"ncr"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
   { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"}, {v:"suppliers",label:"Suppliers",icon:"truck"} ]},
   { group:"Settings", items:[
+    {v:"templates",label:"Templates",icon:"template",mgr:true},
     {v:"team",label:"Team & Access",icon:"users",mgr:true},
     {v:"audit",label:"Audit Trail",icon:"audit",mgr:true},
     {v:"integrations",label:"Integrations",icon:"plug",mgr:true},
@@ -68,7 +69,8 @@ const ICONS = {
   plug:"M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 3.9M15.4 6.6 8.6 10.5",
   spc:"M3 3v18h18M7 15l3-4 3 3 4-6",
   truck:"M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM18.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z",
-  ncr:"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"
+  ncr:"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
+  template:"M8 3H5a2 2 0 0 0-2 2v3M3 16v3a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M7 8h10M7 12h10M7 16h6"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -202,7 +204,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="templates")templatesPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -297,7 +299,7 @@ async function entry(){
   app().innerHTML=`<div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
-      <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}</p></div>
+      <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}${JOB.templateApplied?` · <span title="Stage 1 pre-filled from this template">Template: ${esc(JOB.templateApplied)}</span>`:''}</p></div>
       <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn ghost sm" onclick="raiseCapaFor('${jsq(JOB.jobNo)}')">Raise CAPA</button>`:''} ${canHold&&JOB.statusOverride?`<button class="btn ghost sm" onclick="releaseJob('${jsq(JOB.jobNo)}')">Clear hold</button>`:''} ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
     </div>
     <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
@@ -836,6 +838,61 @@ async function suppliersPage(){
   let list; try{ list=await api("/api/suppliers"); }catch(e){ toast(e.message); return; }
   const rows=list.map(s=>`<tr><td><b>${esc(s.supplier)}</b></td><td>${esc(s.jobs)}</td><td>${esc(s.released)}</td><td>${esc(s.holdReject)}</td><td><span class="pill ${s.fpy>=95?'green':(s.fpy>=85?'amber':'red')}">${esc(s.fpy)}%</span></td><td>${esc(s.defectKg)}</td><td>${esc(s.wasteKg)}</td></tr>`).join("");
   $("#sup_body").innerHTML = list.length?`<div style="overflow-x:auto"><table><thead><tr><th>Supplier</th><th>Jobs</th><th>Released</th><th>Hold/Rej</th><th>FPY</th><th>Defect kg</th><th>Waste kg</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No supplier data yet — set the <b>Supplier</b> field in Stage 1.</div>`;
+}
+
+/* ---------- templates: Stage-1 setup defaults per press / product ---------- */
+const TPL_MAT_COLS=[{k:"materialType",l:"Material Type"},{k:"gauge",l:"Gauge/Thickness (µ)"},{k:"grammage",l:"Grammage GSM"},{k:"dyne",l:"Dyne Level"},{k:"supplier",l:"Supplier"},{k:"batch",l:"Batch#"}];
+const TPL_SET_KEYS=["unwinderTension","infeedTension","outfeedTension","rewindTension","machineSpeed","corona1","corona2","corona3","corona4"];
+async function templatesPage(){
+  if(!isMgrRole()){ app().innerHTML=`<div class="card"><div class="empty">Templates are managed by Supervisors and Quality Managers.</div></div>`; return; }
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let list=[]; try{ list=await api("/api/templates"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load templates — ${esc(e.message)}</div></div>`; return; }
+  window._templates=list;
+  const rows=list.map(t=>`<tr><td><b>${esc(t.name)}</b></td><td>${t.machine?esc(mlabel(t.machine)):'<span class="sub">Any press</span>'}</td><td>${t.productType?esc(t.productType):'<span class="sub">Any product</span>'}</td><td>${((t.settings&&t.settings.materials)||[]).length} mat · ${((t.settings&&t.settings.stations)||[]).length} stn</td><td class="no-print"><button class="btn ghost sm" onclick="templateForm('${jsq(t.id)}')">Edit</button> <button class="btn danger sm" onclick="templateDel('${jsq(t.id)}')">×</button></td></tr>`).join("")||`<tr><td colspan=5><div class="empty">No templates yet — create one to auto-fill Stage 1 on new jobs.</div></td></tr>`;
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">Templates</h2><div style="margin-left:auto" class="no-print"><button class="btn gold" onclick="templateForm()">+ New template</button></div></div>
+    <p class="sub">Default Stage&nbsp;1 setup (machine settings, raw materials, print-station values) applied automatically to a new job by its printing press and/or product type. The most specific match wins; values stay editable on the job.</p>
+    <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Press</th><th>Product Type</th><th>Defaults</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+async function templateDel(id){ if(!confirm("Delete this template?")) return; try{ await api("/api/templates/"+encodeURIComponent(id),{method:"DELETE"}); toast("Template deleted"); templatesPage(); }catch(e){ toast(e.message); } }
+function templateForm(id){ const src=(window._templates||[]).find(x=>x.id===id);
+  const t=src?JSON.parse(JSON.stringify(src)):{ id:null, name:"", machine:"", productType:"", settings:{} };
+  t.settings=t.settings||{}; if(!Array.isArray(t.settings.materials)||!t.settings.materials.length)t.settings.materials=[{}]; if(!Array.isArray(t.settings.stations))t.settings.stations=[];
+  window._tpl=t; tplRender();
+}
+function tplSeedStations(machine){ const groups=(MD.machines[machine]&&MD.machines[machine].stationGroups)||[]; const st=[]; groups.forEach((g,gi)=>(g.stations||[]).forEach(n=>{ const o={group:gi,name:String(n)}; (g.cols||[]).forEach(c=>o[c.key]=""); st.push(o); })); return st; }
+function tplCaptureDom(){ const t=window._tpl; if(!t||!document.getElementById("tpl_name"))return;
+  t.name=val("tpl_name"); t.productType=val("tpl_productType");
+  TPL_SET_KEYS.forEach(k=>t.settings[k]=val("tpl_"+k));
+  document.querySelectorAll('[data-tplmat]').forEach(el=>{ const x=t.settings.materials[+el.dataset.i]; if(x)x[el.dataset.f]=el.value; });
+  document.querySelectorAll('[data-tplst]').forEach(el=>{ const x=t.settings.stations[+el.dataset.i]; if(x)x[el.dataset.f]=el.value; });
+}
+function tplSetMachine(v){ tplCaptureDom(); window._tpl.machine=v; window._tpl.settings.stations=v?tplSeedStations(v):[]; tplRender(); }
+function tplMatAdd(){ tplCaptureDom(); window._tpl.settings.materials.push({}); tplRender(); }
+function tplMatDel(i){ tplCaptureDom(); window._tpl.settings.materials.splice(i,1); if(!window._tpl.settings.materials.length)window._tpl.settings.materials.push({}); tplRender(); }
+async function templateSave(){ tplCaptureDom(); const t=window._tpl; if(!String(t.name||"").trim()){ toast("Enter a template name"); return; }
+  const body={ name:t.name, machine:t.machine||"", productType:t.productType||"", settings:t.settings };
+  try{ if(t.id) await api("/api/templates/"+encodeURIComponent(t.id),{method:"PUT",body}); else await api("/api/templates",{method:"POST",body}); toast("Template saved"); templatesPage(); }catch(e){ toast(e.message); } }
+function tplRender(){ const t=window._tpl; const machine=t.machine||"";
+  if(machine && (!t.settings.stations||!t.settings.stations.length)) t.settings.stations=tplSeedStations(machine);
+  const machineOpts=`<option value="">— Any press —</option>`+Object.keys(MD.machines||{}).map(m=>`<option value="${esc(m)}" ${m===machine?'selected':''}>${esc(MD.machines[m].label)}</option>`).join("");
+  const ptOpts=`<option value="">— Any product —</option>`+(MD.productTypes||[]).map(p=>`<option ${p===(t.productType||"")?'selected':''}>${esc(p)}</option>`).join("");
+  const groups=(MD.machines[machine]&&MD.machines[machine].stationGroups)||[];
+  const stationTables= machine ? (groups.map((g,gi)=>{ const cols=g.cols||[];
+      const head=`<tr><th>Station</th>${cols.map(c=>`<th>${esc(c.label)}</th>`).join("")}</tr>`;
+      const rows=t.settings.stations.map((s,i)=>({s,i})).filter(x=>(x.s.group||0)===gi).map(({s,i})=>`<tr><td><b>${esc(s.name)}</b></td>${cols.map(c=>`<td><input data-tplst="1" data-i="${i}" data-f="${esc(c.key)}" value="${esc(s[c.key]||'')}"></td>`).join("")}</tr>`).join("");
+      return `<h4 style="margin:12px 0 6px">${esc(g.title)}</h4><div style="overflow-x:auto"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+    }).join("")||`<p class="sub">This press has no station groups.</p>`) : `<p class="sub">Pick a printing press to set per-station defaults (station columns depend on the press).</p>`;
+  const matHead=`<tr>${TPL_MAT_COLS.map(c=>`<th>${esc(c.l)}</th>`).join("")}<th></th></tr>`;
+  const matBody=t.settings.materials.map((m,i)=>`<tr>${TPL_MAT_COLS.map(c=>`<td><input data-tplmat="1" data-i="${i}" data-f="${c.k}" value="${esc(m[c.k]||'')}"></td>`).join("")}<td><button class="btn danger sm" onclick="tplMatDel(${i})">×</button></td></tr>`).join("");
+  app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${t.id?'Edit template':'New template'}</h2><div style="margin-left:auto" class="no-print"><button class="btn gold" onclick="templateSave()">Save</button> <button class="btn ghost" onclick="go('templates')">Cancel</button></div></div>
+    <p class="sub">Leave a key as “Any” to make this template a fallback. A job picks the most specific matching template.</p>
+    <div class="grid g3"><div class="field"><label>Name <span class="req">*</span></label><input id="tpl_name" value="${esc(t.name||'')}"></div>
+      <div class="field"><label>Printing Press</label><select id="tpl_machine" onchange="tplSetMachine(this.value)">${machineOpts}</select></div>
+      <div class="field"><label>Product Type</label><select id="tpl_productType">${ptOpts}</select></div></div>
+    <h3>Machine Settings</h3><div class="grid g4">${fT("tpl_unwinderTension","Unwinder Tension (N)",t.settings.unwinderTension)}${fT("tpl_infeedTension","In-Feed Tension (N)",t.settings.infeedTension)}${fT("tpl_outfeedTension","Out-Feed Tension (N)",t.settings.outfeedTension)}${fT("tpl_rewindTension","Rewind Tension (N)",t.settings.rewindTension)}${fT("tpl_machineSpeed","Speed (mpm)",t.settings.machineSpeed)}${fT("tpl_corona1","Corona 1 (W·min/m²)",t.settings.corona1)}${fT("tpl_corona2","Corona 2 (W·min/m²)",t.settings.corona2)}${fT("tpl_corona3","Corona 3 (W·min/m²)",t.settings.corona3)}${fT("tpl_corona4","Corona 4 (W·min/m²)",t.settings.corona4)}</div>
+    <h3>Default Raw Materials</h3><div style="overflow-x:auto"><table><thead>${matHead}</thead><tbody>${matBody}</tbody></table></div><div class="row-actions"><button class="btn ghost sm" onclick="tplMatAdd()">+ Add raw material</button></div>
+    <h3>Default Print Stations${machine?` (${esc(mlabel(machine))})`:''}</h3>${stationTables}
+    <div class="row-actions no-print" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px"><button class="btn gold" onclick="templateSave()">Save template</button> <button class="btn ghost" onclick="go('templates')">Cancel</button></div></div>`;
 }
 
 /* team & access */
