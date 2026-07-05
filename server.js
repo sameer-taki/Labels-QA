@@ -75,7 +75,7 @@ function defaultMachines(){
       stationGroups:[{ title:'Flexo Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:FLEXO_COLS }] },
     NilPeter: { form: 'F-016-E', label: 'NilPeter', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6','Station 7','Station 8'],
       stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','11'], cols:GRAVURE_COLS },{ title:'UV Flexo Stations', stations:['5','6','7','8','9','10'], cols:UVFLEXO_COLS }] },
-    BOBST: { form: 'F-027-A', label: 'BOBST (Lamination)', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'],
+    BOBST: { form: 'F-027-A', label: 'Bobst', stations: ['Infeed','Station 1','Station 2','Station 3','Station 4','Station 5','Station 6'],
       stationGroups:[{ title:'Gravure Stations', stations:['1','2','3','4','5','6','7','8','9'], cols:GRAVURE_COLS }] }
   };
 }
@@ -88,6 +88,7 @@ function migrateMasterdata(){
   const dm=defaultMachines();
   if(!md.machines){ md.machines=dm; changed=true; }
   else Object.keys(dm).forEach(k=>{ if(!md.machines[k]){ md.machines[k]=dm[k]; changed=true; } else if(!Array.isArray(md.machines[k].stationGroups)){ md.machines[k].stationGroups=dm[k].stationGroups; changed=true; } });
+  if(md.machines.BOBST && md.machines.BOBST.label==='BOBST (Lamination)'){ md.machines.BOBST.label='Bobst'; changed=true; }
   if(!Array.isArray(md.defectTypes)){ md.defectTypes=['Hickey','Mis-register','Ink splash','Bubble','Streak','Scratch','Colour variation','Die-cut error','Lamination defect','Foreign matter']; changed=true; }
   return changed;
 }
