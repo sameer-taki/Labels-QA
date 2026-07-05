@@ -131,6 +131,7 @@ real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
 
 Full documentation lives in [`docs/`](docs):
 
+- **[docs/USER-MANUAL.md](docs/USER-MANUAL.md)** — the end-user manual: signing in, offline use, and every screen (all four stages, CAPA/NCR, equipment, SPC, reports, templates, settings) step by step.
 - **[docs/SYSTEM-GUIDE.md](docs/SYSTEM-GUIDE.md)** — architecture, every module, roles & permissions, data model, configuration, security, API reference.
 - **[docs/KNOWLEDGE-BASE.md](docs/KNOWLEDGE-BASE.md)** — how-to articles, FAQ, and troubleshooting (incl. deployment).
 - **[docs/USER-TRAINING.md](docs/USER-TRAINING.md)** — role-based training (QA Officer → Supervisor → Quality Manager → Administrator) with exercises and a quick-reference card.

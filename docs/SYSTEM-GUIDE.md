@@ -5,6 +5,7 @@ Golden Manufacturers Pte Ltd · Quality Department
 
 This is the reference manual for the Golden QA application: what it is, how it's built,
 every feature, who can do what, and how it's configured and deployed. Companion documents:
+[USER-MANUAL.md](USER-MANUAL.md) (screen-by-screen end-user manual),
 [KNOWLEDGE-BASE.md](KNOWLEDGE-BASE.md) (how-to + troubleshooting) and
 [USER-TRAINING.md](USER-TRAINING.md) (role-based training).
 
