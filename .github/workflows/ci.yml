@@ -1,7 +1,12 @@
 # Golden QA App - Continuous Integration
 #
-# Runs on every pull request and on pushes to main. Gate branch protection on
-# the "app" checks so only green commits land on main.
+# Runs on every pull request and on pushes to main. Two jobs:
+#   - app       : node --check + JSON-mode smoke tests on Node 20 & 24
+#   - container : builds the image, validates both compose files, and boots the
+#                 full stack against real Postgres, gating on /api/health/ready.
+# Gate branch protection on BOTH ("app" and "container") so only green commits
+# land on main — the container job catches build/compose/DB regressions that the
+# app job (JSON driver only) can't, before they reach the live Portainer deploy.
 #
 # Deployment is NOT handled here. Portainer (GitOps) polls this GitHub repo and
 # redeploys the merged commit on the shared Docker host once it appears on main.
@@ -57,3 +62,55 @@ jobs:
         # JSON-mode smoke test: spawns the server with no DATABASE_URL set,
         # exercises the HTTP API, then restores data/db.json.
         run: npm test
+
+  container:
+    name: container build & health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Dummy secrets for CI only. SECRET_KEY must be >= 16 alphanumeric chars
+      # (prod guard in server.js). Compose auto-loads this .env from the repo root;
+      # .dockerignore excludes .env* so it never enters the image.
+      - name: Write CI .env
+        run: |
+          cat > .env <<'EOF'
+          APP_HOST=ci.example.com
+          DB_PASSWORD=ci-db-password
+          SECRET_KEY=cisecret0123456789ABCDEFcisecret
+          ADMIN_PASSWORD=ci-admin-password
+          TZ=UTC
+          EOF
+
+      - name: Validate both compose files render
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml config >/dev/null
+          # traefik file's 'web' network is external; config renders without it existing.
+          docker compose -f docker-compose.traefik.yml config >/dev/null
+          echo "Both compose files render."
+
+      - name: Build & boot the stack (real Postgres path)
+        # Standalone compose bundles Postgres and publishes 3000. up --build proves
+        # the image builds and the Postgres code path (skipped by the app job) works.
+        run: docker compose -f docker-compose.yml up -d --build
+
+      - name: Wait for readiness (/api/health/ready -> 200)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:3000/api/health/ready; then
+              echo; echo "app is ready (Postgres reachable)."; exit 0
+            fi
+            echo "waiting for app readiness ($i/40)..."; sleep 3
+          done
+          echo "app did not become ready in time"; exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml logs --no-color --tail 200 || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml down -v || true

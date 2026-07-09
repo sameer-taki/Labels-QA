@@ -1,6 +1,9 @@
-# syntax=docker/dockerfile:1
-#
 # Golden QA App — container image
+#
+# NOTE: intentionally no `# syntax=docker/dockerfile:1` directive. This Dockerfile uses only
+# classic instructions (no BuildKit-only features), so the directive would only add a build-time
+# fetch of the docker/dockerfile frontend from Docker Hub — a needless failure point on an
+# offline / rate-limited / classic-builder host (the shared host builds without buildx).
 # -------------------------------------------------------------------
 # Single-stage build. ONE Node process serves both the REST API and
 # the static PWA (public/) on a single port — there is NO frontend

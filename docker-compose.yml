@@ -45,6 +45,10 @@ services:
     volumes:
       - goldenqa_uploads:/app/data/uploads
       - goldenqa_backups:/backups:ro
+    labels:
+      # Let the autoheal sidecar restart this container if the image HEALTHCHECK
+      # (see Dockerfile — probes /api/health/ready) reports it unhealthy.
+      - "autoheal=true"
 
   db:
     image: postgres:16-alpine
@@ -84,6 +88,19 @@ services:
       TZ: ${TZ:-Pacific/Fiji}
     volumes:
       - goldenqa_backups:/backups
+
+  # Restarts any container labelled autoheal=true when Docker reports it unhealthy
+  # (the app image ships a HEALTHCHECK). Needs the Docker socket to issue restarts.
+  autoheal:
+    image: willfarrell/autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 60
+      TZ: ${TZ:-Pacific/Fiji}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   goldenqa_pgdata:
