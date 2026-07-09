@@ -17,6 +17,10 @@ services:
       context: .
       dockerfile: Dockerfile
     image: goldenqa:latest
+    # This image is BUILT from source here, not pulled from a registry. pull_policy: build
+    # tells Compose to always (re)build and never try to `docker pull goldenqa:latest` (which
+    # would fail with "pull access denied"). Also disable "Re-pull image" on the Portainer stack.
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       db:
