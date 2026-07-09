@@ -67,6 +67,16 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
   (monthly, 6 sections / 59 items) — standalone **Checklists** with two-person sign-off (Completed by
   → Verified by). Both ship fully populated; items and sections are **admin-editable** (Settings →
   Checklist forms — a `## Section` line starts a new section).
+  - **Photos** — attach as many images as needed, either to the whole submission or **per line item**
+    (📷 in each row). Great for evidencing a defect or a cleaned surface.
+  - **Instant e-mail** — completing (or verifying) a checklist immediately e-mails the inspection to
+    the **Quality Manager, Supervisors and Administrators** (plus any digest recipients) and mirrors to
+    Teams. *Requires SMTP configured in `config.json → notify.email`* (see §4); if SMTP is off it
+    silently no-ops.
+  - **Due-tracking & reminders** — the Checklists page shows a **"Checks due"** panel: daily forms are
+    flagged **due before mid-day** (overdue after), monthly forms surface **toward month-end**. An
+    hourly job e-mails a reminder for anything overdue/outstanding (same SMTP requirement). The daily
+    cut-off hour is configurable per form (default noon).
 
 ### Amendments History
 

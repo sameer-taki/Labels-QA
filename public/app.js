@@ -821,15 +821,37 @@ function statusPillCal(r){ const bad=String(r||'').toLowerCase().indexOf('fail')
 /* ---------- Checklists (F-012 hygiene, F-013B GMP, …) ---------- */
 function chkRespOpts(def){ return def && def.responseType==='yesno' ? ['','Yes','No'] : ['','Yes','X']; }
 function chkStatusPill(s){ if(s==='Yes') return '<span class="pill green">Yes</span>'; if(s==='X'||s==='No') return '<span class="pill red">'+esc(s)+'</span>'; return '<span class="pill grey">—</span>'; }
+/* Attach a photo to the whole submission (no key) or to a specific item (key). Reuses /api/upload. */
+async function chkPhoto(ev, key){
+  const f=ev.target.files[0]; if(!f)return; ev.target.value='';
+  const dataUrl=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(f); });
+  try{ const res=await api("/api/upload",{method:"POST",body:{dataUrl,name:f.name}});
+    if(key){ const r=window._chkResp[key]; r.photos=r.photos||[]; r.photos.push(res.url); const c=document.getElementById('cph_'+key); if(c)c.textContent=r.photos.length; }
+    else { window._chkPhotos.push(res.url); const t=$("#chkthumbs"); if(t)t.innerHTML+=`<img src="${esc(res.url)}">`; }
+    toast("Photo added");
+  }catch(e){ toast("Upload failed (offline?)"); }
+}
 async function checklistsPage(){
   app().innerHTML=`<div class="empty">Loading…</div>`;
-  let defs=[], subs=[];
-  try{ defs=await api("/api/checklist-defs"); subs=await api("/api/checklists"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load — ${esc(e.message)}</div></div>`; return; }
+  let defs=[], subs=[], due=[];
+  try{ defs=await api("/api/checklist-defs"); subs=await api("/api/checklists"); due=await api("/api/checklists/due"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load — ${esc(e.message)}</div></div>`; return; }
   window._chkDefs=defs; window._chkSubs=subs;
   const opts=defs.filter(d=>d.active!==false).map(d=>`<option value="${esc(d.id)}">${esc(d.code)} — ${esc(d.title)}</option>`).join("");
+  const duePill=d=>({done:'<span class="pill green">Done</span>',due:'<span class="pill amber">Due</span>',overdue:'<span class="pill red">Overdue</span>',scheduled:'<span class="pill grey">Scheduled</span>'}[d.status]||'');
+  const dueFreqLabel=d=>{
+    const by=d.dueByHour==null?12:d.dueByHour;
+    if(d.frequency==='daily') return 'Daily · before '+by+':00';
+    if(d.frequency==='shift') return 'Per shift · before '+by+':00';
+    if(d.frequency==='weekly') return 'Weekly';
+    if(d.frequency==='monthly') return 'Monthly'+(d.daysLeft!=null?(' · '+d.daysLeft+'d left'):'');
+    if(d.frequency==='ad-hoc') return 'Ad-hoc';
+    return esc(d.frequency||'');
+  };
+  const dueCards=due.map(d=>`<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:200px"><div style="display:flex;gap:8px;align-items:center"><b>${esc(d.code)}</b> ${duePill(d)}</div><div class="sub" style="margin-top:4px">${dueFreqLabel(d)}${d.lastDone?(' · last '+esc(d.lastDone)):''}</div></div>`).join("");
   app().innerHTML=`<div class="card no-print">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Checklists</h2><p class="sub" style="margin:4px 0 0">Daily hygiene, GMP and other sign-off checklists.</p></div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Checklists</h2><p class="sub" style="margin:4px 0 0">Daily hygiene (before mid-day), GMP &amp; other checks (monthly, toward month-end).</p></div>
       <div style="margin-left:auto"><button class="btn ghost" onclick="dlAuth('/api/export/workbook.xls','golden-qa-report.xls')">⤓ Export (Excel)</button></div></div>
+      ${due.length?`<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 4px">${dueCards}</div>`:''}
       <div class="field" style="max-width:520px;margin-top:8px"><label>New checklist</label><select id="chk_def" onchange="chkPick()"><option value="">— Select a checklist —</option>${opts}</select></div>
       <div id="chkform"></div>
     </div>
@@ -852,12 +874,13 @@ function chkPick(){
   if(!def){ host.innerHTML=""; return; }
   if(!def.items||!def.items.length){ host.innerHTML=`<div class="banner warn" style="margin-top:12px">This checklist has no items yet. An administrator can add them in <b>Settings → Checklist forms</b>.</div>`; return; }
   // Responses keyed by item key (headers are skipped) so section rows don't shift indexes.
-  window._chkResp={}; def.items.forEach(it=>{ if(!it.header) window._chkResp[it.key]={itemKey:it.key,status:'',correctiveAction:''}; });
+  window._chkResp={}; window._chkPhotos=[]; def.items.forEach(it=>{ if(!it.header) window._chkResp[it.key]={itemKey:it.key,status:'',correctiveAction:'',photos:[]}; });
   const opts=chkRespOpts(def);
-  const cols=def.hasCorrectiveAction?3:2;
+  const cols=def.hasCorrectiveAction?4:3;
+  const camCell=k=>`<label class="btn ghost sm" style="cursor:pointer" title="Attach photo">📷 <span id="cph_${esc(k)}">0</span><input type="file" accept="image/*" capture="environment" style="display:none" onchange="chkPhoto(event,'${jsq(k)}')"></label>`;
   const rows=def.items.map(it=>{
     if(it.header) return `<tr><td colspan="${cols}" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
-    return `<tr><td style="max-width:520px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}</tr>`;
+    return `<tr><td style="max-width:480px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}<td class="no-print">${camCell(it.key)}</td></tr>`;
   }).join("");
   host.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
     <div class="grid g3">
@@ -865,15 +888,18 @@ function chkPick(){
       <div class="field"><label>Shift</label><input id="chk_shift" placeholder="Day / Night"></div>
       <div class="field"><label>Completed by</label><input id="chk_by" value="${esc(ME?ME.name:'')}"></div>
     </div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th>${def.hasCorrectiveAction?'<th>Corrective action / comment</th>':''}</tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th>${def.hasCorrectiveAction?'<th>Corrective action / comment</th>':''}<th class="no-print">Photo</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="field"><label>Comments</label><textarea id="chk_comments"></textarea></div>
+    <h4 style="margin:12px 0 4px">Photos</h4><p class="sub" style="margin:0 0 6px">Attach as many photos as needed — overall, or per item using the 📷 in each row.</p>
+    <div class="row-actions no-print"><label class="btn ghost sm" style="cursor:pointer">📷 Add photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="chkPhoto(event)"></label></div>
+    <div class="thumbs" id="chkthumbs"></div>
     <div class="row-actions"><button class="btn" onclick="chkSave(false)">Save draft</button><button class="btn gold" onclick="chkSave(true)">Save &amp; mark complete</button></div>
     <p class="sub">A second person (Supervisor+) verifies a completed checklist from the list below.</p>
   </div>`;
 }
 async function chkSave(complete){
   const defId=val("chk_def"); if(!defId){ toast("Pick a checklist"); return; }
-  const body={ defKey:defId, date:val("chk_date"), shift:val("chk_shift").trim(), completedByName:val("chk_by").trim(), comments:val("chk_comments"), responses:Object.values(window._chkResp||{}), status:complete?'Completed':'Draft' };
+  const body={ defKey:defId, date:val("chk_date"), shift:val("chk_shift").trim(), completedByName:val("chk_by").trim(), comments:val("chk_comments"), responses:Object.values(window._chkResp||{}), photos:window._chkPhotos||[], status:complete?'Completed':'Draft' };
   try{ await api("/api/checklists",{method:"POST",body,queueable:true,optimistic:{}}); toast(complete?"Checklist completed":"Draft saved"); checklistsPage(); }catch(e){ toast(e.message); }
 }
 async function chkVerify(id){ if(!confirm("Verify this checklist? You confirm the checks were done correctly.")) return; try{ await api("/api/checklists/"+encodeURIComponent(id)+"/verify",{method:"POST",body:{}}); toast("Checklist verified"); checklistsPage(); }catch(e){ toast(e.message); } }
@@ -887,12 +913,15 @@ async function chkView(id){
   const src=(def.items&&def.items.length)?def.items:(s.responses||[]).map(r=>({key:r.itemKey,label:r.itemKey}));
   const rows=src.map(it=>{
     if(it.header) return `<tr><td colspan="3" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
-    const r=respOf[it.key]||{}; return `<tr><td style="max-width:520px">${esc(it.label)}</td><td>${chkStatusPill(r.status)}</td><td>${esc(r.correctiveAction||'')}</td></tr>`;
+    const r=respOf[it.key]||{}; const ph=(r.photos&&r.photos.length)?`<div class="thumbs">${r.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:'';
+    return `<tr><td style="max-width:520px">${esc(it.label)}</td><td>${chkStatusPill(r.status)}</td><td>${esc(r.correctiveAction||'')}${ph}</td></tr>`;
   }).join("");
+  const subPhotos=(s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:'';
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:820px"><h2>${esc(s.code)} — ${esc(s.title)}</h2>
     <p class="sub">${esc(s.date)}${s.shift?' · '+esc(s.shift):''} · Completed by ${esc(s.completedByName||s.completedBy||'')}${s.verifiedByName?' · Verified by '+esc(s.verifiedByName):''}</p>
     <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th><th>Corrective action / comment</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${s.comments?`<h4>Comments</h4><p>${esc(s.comments)}</p>`:''}
+    ${subPhotos}
     <div class="row-actions no-print"><button class="btn gold" onclick="window.print()">📄 Print</button><button class="btn ghost" onclick="closeModal()">Close</button></div></div></div>`;
 }
 

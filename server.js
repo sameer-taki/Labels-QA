@@ -52,6 +52,7 @@ async function loadDB() {
     seedChecklistDefs().forEach(seed => { const cur = DB.checklistDefs.find(d => d.code === seed.code); if (cur && (!Array.isArray(cur.items) || !cur.items.length) && seed.items.length) { cur.items = seed.items; cur.frequency = seed.frequency; } });
   }
   if (!Array.isArray(DB.checklists)) DB.checklists = [];
+  if (!DB.checklistReminders || typeof DB.checklistReminders !== 'object') DB.checklistReminders = {}; // defId -> last-reminded period (persisted dedup)
   if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
   if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
   if (!Array.isArray(DB.audit)) DB.audit = [];
@@ -485,7 +486,7 @@ const CAPA_SEVERITY = ['Low','Medium','High','Critical'];
 const CAPA_STATUS = ['Open','In Progress','Closed'];
 const EQUIP_TYPES = ['Machine','Anilox','Gauge','Verifier','Scale','Other'];
 const CAL_DUE_SOON_DAYS = Number((CFG.quality && CFG.quality.calDueSoonDays)) || 14;
-const WEBHOOK_EVENTS = ['job.released','job.hold','capa.opened','capa.closed','equipment.calibrated'];
+const WEBHOOK_EVENTS = ['job.released','job.hold','capa.opened','capa.closed','equipment.calibrated','checklist.completed','checklist.verified'];
 const NCR_DISPOSITION = ['Use as is','Rework','Reject','Return to supplier','Scrap'];
 const NCR_STATUS = ['Open','Closed'];
 const CAPA_EFFECTIVENESS = ['','Pending','Verified','Not effective'];
@@ -509,6 +510,7 @@ function cleanChecklistDef(b){
     responseType: CHECKLIST_RESPONSE.includes(b.responseType)?b.responseType:'satisfactory',
     hasCorrectiveAction: b.hasCorrectiveAction!==false,
     requireVerify: b.requireVerify!==false,
+    dueByHour: (b.dueByHour!=null && Number(b.dueByHour)>=0 && Number(b.dueByHour)<=23) ? Number(b.dueByHour) : 12, // daily forms: due before this local hour (noon default)
     active: b.active!==false,
     items
   };
@@ -523,6 +525,90 @@ function validateChecklistComplete(def, sub){
   if(unanswered.length) miss.push(unanswered.length+' unanswered item(s)');
   return miss;
 }
+/* Only accept server-issued upload URLs (photos are added via POST /api/upload). */
+function cleanUploadUrls(arr, max){ return (Array.isArray(arr)?arr:[]).map(String).filter(u=>/^\/uploads\/[\w.\-]+$/.test(u)).slice(0, max||30); }
+function cleanChecklistResponses(arr){ return (Array.isArray(arr)?arr:[]).map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||''), photos:cleanUploadUrls(r&&r.photos, 8) })).filter(r=>r.itemKey); }
+/* Instant e-mail of a completed/verified inspection to managers + supervisors (and the configured
+   digest recipients). Non-blocking; also mirrors to Teams. Requires SMTP configured in config.notify.email. */
+function checklistRecipients(){
+  const roleTo=(DB.users||[]).filter(u=>['Supervisor','Quality Manager','Administrator'].includes(u.role) && EMAIL_RE.test(String(u.email||''))).map(u=>u.email.toLowerCase());
+  const cfgTo=[].concat((CFG.notify&&CFG.notify.email&&CFG.notify.email.to)||[]).map(s=>String(s).trim().toLowerCase()).filter(Boolean);
+  return [...new Set(roleTo.concat(cfgTo))];
+}
+function checklistEmailHtml(sub, def){
+  const e=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const labelOf=k=>{ const it=((def&&def.items)||[]).find(x=>x.key===k); return it?it.label:k; };
+  const bad=(sub.responses||[]).filter(r=>r.status && r.status!=='Yes');
+  const rows=(sub.responses||[]).filter(r=>r.status).map(r=>`<tr><td style="padding:4px 8px;border:1px solid #dde5ee">${e(labelOf(r.itemKey))}</td><td style="padding:4px 8px;border:1px solid #dde5ee;color:${(r.status==='Yes')?'#2a7d55':'#b5342a'};font-weight:600">${e(r.status)}</td><td style="padding:4px 8px;border:1px solid #dde5ee">${e(r.correctiveAction||'')}</td></tr>`).join('');
+  return '<div style="font-family:Segoe UI,Arial,sans-serif;color:#1f2937">'+
+    '<h2 style="color:#0e2a47;margin:0 0 2px">'+e(sub.code)+' — '+e(sub.title)+'</h2>'+
+    '<p style="color:#5b6b80;margin:0 0 10px">'+e(sub.date)+(sub.shift?' · '+e(sub.shift):'')+' · '+e(sub.status)+' · Completed by '+e(sub.completedByName||sub.completedBy)+(sub.verifiedByName?(' · Verified by '+e(sub.verifiedByName)):'')+'</p>'+
+    (bad.length?('<p style="color:#b5342a;font-weight:700">'+bad.length+' unsatisfactory item(s) — action required</p>'):'<p style="color:#2a7d55;font-weight:700">All items satisfactory</p>')+
+    '<table style="border-collapse:collapse;font-size:13px"><tr><th style="padding:4px 8px;border:1px solid #dde5ee;text-align:left">Item</th><th style="padding:4px 8px;border:1px solid #dde5ee">Status</th><th style="padding:4px 8px;border:1px solid #dde5ee;text-align:left">Corrective action</th></tr>'+rows+'</table>'+
+    (sub.comments?('<p><b>Comments:</b> '+e(sub.comments)+'</p>'):'')+
+    ((sub.photos&&sub.photos.length)?('<p>'+sub.photos.length+' photo(s) attached in the app.</p>'):'')+
+    '</div>';
+}
+function checklistEmailText(sub){
+  const bad=(sub.responses||[]).filter(r=>r.status && r.status!=='Yes').length;
+  return [sub.code+' — '+sub.title, sub.date+(sub.shift?' · '+sub.shift:'')+' · '+sub.status,
+    'Completed by: '+(sub.completedByName||sub.completedBy)+(sub.verifiedByName?(' · Verified by: '+sub.verifiedByName):''),
+    bad?(bad+' unsatisfactory item(s) — action required'):'All items satisfactory',
+    sub.comments?('Comments: '+sub.comments):''].filter(Boolean).join('\n');
+}
+const _emailThrottle=new Map(); const EMAIL_COOLDOWN_MS=5*60000;
+function emailChecklist(sub, def, event){
+  try{
+    // Throttle: at most one email per record+event per cooldown, so a client that loops
+    // complete↔draft (or re-POSTs) can't email-bomb managers / hammer webhooks.
+    const now=Date.now(); const tkey=sub.id+'|'+(event||'');
+    const last=_emailThrottle.get(tkey); if(last && (now-last)<EMAIL_COOLDOWN_MS) return;
+    _emailThrottle.set(tkey, now);
+    if(_emailThrottle.size>2000){ for(const [k,v] of _emailThrottle){ if(now-v>EMAIL_COOLDOWN_MS) _emailThrottle.delete(k); } }
+    const to=checklistRecipients();
+    const subject=CFG.orgName+' — '+sub.code+' '+(event||'submitted')+' ('+sub.date+')';
+    if(to.length) EMAIL.send(CFG, { to, subject, text:checklistEmailText(sub), html:checklistEmailHtml(sub, def) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist email:', r.error); }).catch(()=>{});
+    try{ NOTIFY.alert(CFG, subject, checklistEmailText(sub)); }catch(e){}
+    fireEvent(event==='verified'?'checklist.verified':'checklist.completed', { id:sub.id, code:sub.code, date:sub.date, status:sub.status, unsatisfactory:(sub.responses||[]).filter(r=>r.status&&r.status!=='Yes').length });
+  }catch(e){ console.warn('emailChecklist failed:', e && e.message); }
+}
+/* Due status for a checklist form: daily forms are due each day before dueByHour (default noon);
+   monthly forms are due each month, flagged toward month-end and overdue once the month ends unmet. */
+function isoDow(ymd){ const d=new Date(ymd+'T00:00:00Z'); const g=d.getUTCDay(); return g===0?7:g; } // Mon=1 … Sun=7
+function isoWeekKey(ymd){ // ISO-8601 week label, e.g. "2026-W28" (stable per-week period key)
+  const d=new Date(ymd+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7)+3); // Thursday of this week
+  const firstThu=new Date(Date.UTC(d.getUTCFullYear(),0,4)); firstThu.setUTCDate(firstThu.getUTCDate()-((firstThu.getUTCDay()+6)%7)+3);
+  const week=1+Math.round((d-firstThu)/(7*86400000));
+  return d.getUTCFullYear()+'-W'+String(week).padStart(2,'0');
+}
+function dueByHourOf(def){ const n=Number(def && def.dueByHour); return (def && def.dueByHour!=null && !isNaN(n) && n>=0 && n<=23) ? n : 12; }
+function checklistDue(def){
+  const subs=(DB.checklists||[]).filter(c=>c.defKey===def.id && (c.status==='Completed'||c.status==='Verified'));
+  const today=todayYmd(); const month=today.slice(0,7);
+  const last=subs.map(c=>c.date).filter(Boolean).sort().slice(-1)[0]||'';
+  const freq=CHECKLIST_FREQ.includes(def.frequency)?def.frequency:'daily';
+  const base={ defId:def.id, code:def.code, title:def.title, frequency:freq, lastDone:last };
+  // Monthly (GMP, calibration): "preferably towards month-end" — due in the final week, never nags daily.
+  if(freq==='monthly'){
+    const doneThisMonth=subs.some(c=>String(c.date||'').slice(0,7)===month);
+    const d=new Date(today+'T00:00:00Z'); const daysInMonth=new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 0)).getUTCDate();
+    const daysLeft=daysInMonth-Number(today.slice(8,10));
+    return Object.assign(base,{ period:month, daysLeft, status: doneThisMonth?'done':(daysLeft<=7?'due':'scheduled') });
+  }
+  // Weekly: done if completed this ISO week; surfaced as due from Friday on; never nags daily.
+  if(freq==='weekly'){
+    const wk=isoWeekKey(today);
+    const doneThisWeek=subs.some(c=>c.date && isoWeekKey(c.date)===wk);
+    return Object.assign(base,{ period:wk, status: doneThisWeek?'done':(isoDow(today)>=5?'due':'scheduled') });
+  }
+  // Ad-hoc: no schedule — informational only, never overdue, never reminded.
+  if(freq==='ad-hoc') return Object.assign(base,{ period:today, status:'scheduled' });
+  // Daily / shift: due before the cut-off hour (default noon), overdue after, until done today.
+  const doneToday=subs.some(c=>c.date===today); const by=dueByHourOf(def);
+  return Object.assign(base,{ period:today, dueByHour:by, status: doneToday?'done':(nowHourLocal()>=by?'overdue':'due') });
+}
+function nowHourLocal(){ try{ return Number(new Intl.DateTimeFormat('en-GB',{ timeZone:APP_TZ, hour:'2-digit', hour12:false }).format(new Date()))%24; }catch(e){ return new Date().getHours(); } }
+function checklistsDue(){ return (DB.checklistDefs||[]).filter(d=>d.active!==false).map(checklistDue); }
 
 /* date helpers (YYYY-MM-DD). "Today" is resolved in the plant's local timezone (TZ env or
    config.timezone, default Pacific/Fiji) so overdue/due-soon logic matches the shop floor and
@@ -1123,6 +1209,7 @@ async function api(req, res, url) {
   }
 
   /* ----- Checklist SUBMISSIONS (dated records, two-person sign-off) ----- */
+  if (seg[0]==='checklists' && seg[1]==='due' && method==='GET') return send(res,200, checklistsDue());
   if (seg[0]==='checklists' && method==='GET' && !seg[1]) {
     let list=(DB.checklists||[]).slice();
     const fd=url.searchParams.get('defKey'); if(fd) list=list.filter(c=>c.defKey===fd);
@@ -1136,16 +1223,17 @@ async function api(req, res, url) {
   if (seg[0]==='checklists' && method==='POST' && !seg[1]) {
     const b=await readBody(req);
     const def=(DB.checklistDefs||[]).find(d=>d.id===b.defKey || d.code===b.defKey); if(!def) return send(res,400,{error:'Unknown checklist form'});
-    const responses=Array.isArray(b.responses)?b.responses.map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||'') })).filter(r=>r.itemKey):[];
     const markComplete = b.status==='Completed';
     const sub={ id:genId('CHK'), defKey:def.id, code:def.code, title:def.title,
       date:String(b.date||'').trim()||todayYmd(), shift:String(b.shift||'').trim(), area:String(b.area||'').trim(),
-      responses, comments:String(b.comments||'').trim(),
+      responses:cleanChecklistResponses(b.responses), comments:String(b.comments||'').trim(), photos:cleanUploadUrls(b.photos, 30),
       completedBy:user.id, completedByName:String(b.completedByName||'').trim()||user.name||user.id,
       status: markComplete?'Completed':'Draft', verifiedBy:'', verifiedByName:'', verifiedAt:'',
       createdBy:user.id, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
     if(markComplete){ const miss=validateChecklistComplete(def, sub); if(miss.length) return send(res,400,{error:'Cannot complete — missing: '+miss.join(', '), missing:miss}); }
-    DB.checklists.push(sub); audit(user,'checklist-'+(markComplete?'complete':'save'),{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff({}, sub, {skip:['createdBy','createdAt','id','responses']}) }); saveDB(); return send(res,200,sub);
+    DB.checklists.push(sub); audit(user,'checklist-'+(markComplete?'complete':'save'),{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff({}, sub, {skip:['createdBy','createdAt','id','responses']}) }); saveDB();
+    if(markComplete) emailChecklist(sub, def, 'completed'); // instant email to managers + supervisors
+    return send(res,200,sub);
   }
   if (seg[0]==='checklists' && seg[1] && seg[2]==='verify' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can verify a checklist'});
@@ -1153,21 +1241,28 @@ async function api(req, res, url) {
     if(sub.status!=='Completed') return send(res,409,{error:'Only a completed checklist can be verified'});
     if(sub.completedBy===user.id) return send(res,403,{error:'A checklist must be verified by someone other than the person who completed it'});
     sub.verifiedBy=user.id; sub.verifiedByName=user.name||user.id; sub.verifiedAt=new Date().toISOString(); sub.status='Verified'; sub.updatedAt=sub.verifiedAt;
-    audit(user,'checklist-verify',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:[{field:'status', from:'Completed', to:'Verified'}] }); saveDB(); return send(res,200,sub);
+    audit(user,'checklist-verify',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:[{field:'status', from:'Completed', to:'Verified'}] }); saveDB();
+    emailChecklist(sub, (DB.checklistDefs||[]).find(d=>d.id===sub.defKey), 'verified');
+    return send(res,200,sub);
   }
   if (seg[0]==='checklists' && seg[1] && method==='PUT') {
     const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
     const def=(DB.checklistDefs||[]).find(d=>d.id===sub.defKey)||{items:[]};
-    const b=await readBody(req); const before=JSON.parse(JSON.stringify(sub));
-    if(Array.isArray(b.responses)) sub.responses=b.responses.map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||'') })).filter(r=>r.itemKey);
+    const b=await readBody(req); const before=JSON.parse(JSON.stringify(sub)); const wasComplete=sub.status==='Completed'||sub.status==='Verified';
+    if(Array.isArray(b.responses)) sub.responses=cleanChecklistResponses(b.responses);
+    if(Array.isArray(b.photos)) sub.photos=cleanUploadUrls(b.photos, 30);
     ['date','shift','area','comments'].forEach(k=>{ if(typeof b[k]==='string') sub[k]=b[k].trim(); });
+    let becameComplete=false;
     if(b.status && ['Draft','Completed'].includes(b.status)){
       if(b.status==='Completed'){ const miss=validateChecklistComplete(def, sub); if(miss.length) return send(res,400,{error:'Cannot complete — missing: '+miss.join(', '), missing:miss}); }
       // Editing a verified/completed record re-opens it to Draft/Completed and clears verification.
       sub.status=b.status; if(b.status!=='Verified'){ sub.verifiedBy=''; sub.verifiedByName=''; sub.verifiedAt=''; }
+      becameComplete = b.status==='Completed' && !wasComplete;
     }
     sub.updatedAt=new Date().toISOString();
-    audit(user,'checklist-update',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) }); saveDB(); return send(res,200,sub);
+    audit(user,'checklist-update',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) }); saveDB();
+    if(becameComplete) emailChecklist(sub, def, 'completed');
+    return send(res,200,sub);
   }
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
@@ -1397,6 +1492,32 @@ function checkCapaSla(){
     if(changed) saveDB();
   }catch(e){ console.warn('CAPA SLA check failed:', e && e.message); }
 }
+/* Remind managers/supervisors of checklists not done in time: daily/shift forms once they pass their
+   due hour (mid-day), weekly/monthly forms once they surface as due. Deduped per form+period, and
+   the dedup is PERSISTED (DB.checklistReminders: defId -> last-reminded period) so a restart within
+   the same period does not re-send. Ad-hoc forms have no schedule and are never reminded. */
+function checkChecklistReminders(){
+  try{
+    if(!DB.checklistReminders || typeof DB.checklistReminders!=='object') DB.checklistReminders={};
+    let changed=false;
+    checklistsDue().forEach(d=>{
+      const nag = d.status==='overdue' || ((d.frequency==='monthly'||d.frequency==='weekly') && d.status==='due');
+      if(!nag) return;
+      if(DB.checklistReminders[d.defId]===d.period) return; // already reminded this period (survives restart)
+      DB.checklistReminders[d.defId]=d.period; changed=true;
+      const to=checklistRecipients();
+      const subject=CFG.orgName+' — '+d.code+' checklist '+(d.status==='overdue'?'OVERDUE':'due')+' ('+d.period+')';
+      const cadence = (d.frequency==='daily'||d.frequency==='shift') ? (' Due before '+String(dueByHourOf(d))+':00.')
+        : (d.frequency==='weekly') ? ' Weekly check due this week.'
+        : (' Monthly check — '+(d.daysLeft!=null?d.daysLeft+' day(s) left this month.':'due this month.'));
+      const text=d.code+' ('+d.title+') has not been completed for '+d.period+'.'+cadence;
+      if(to.length) EMAIL.send(CFG,{ to, subject, text }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Checklist reminder email:', r.error); }).catch(()=>{});
+      try{ NOTIFY.alert(CFG, subject, text); }catch(e){}
+      audit(null,'checklist-reminder','',d.code+' '+d.period+' ('+d.status+')');
+    });
+    if(changed) saveDB(); // persist the dedup map + the reminder audit entries
+  }catch(e){ console.warn('Checklist reminder check failed:', e && e.message); }
+}
 
 /* ---------- manager digest (emailed / Teams) ---------- */
 function buildDigest(){
@@ -1467,6 +1588,7 @@ process.on('SIGINT', ()=>shutdown('SIGINT'));
   if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: process.env.BACKUP_DIR || path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
   const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
   const repTimer = setInterval(maybeSendScheduledReport, 60*60000); if (repTimer.unref) repTimer.unref(); maybeSendScheduledReport();
+  const chkTimer = setInterval(checkChecklistReminders, 60*60000); if (chkTimer.unref) chkTimer.unref(); checkChecklistReminders();
   const authMode = LDAP.isEnabled(CFG) ? 'Active Directory (LDAPS) + local' : 'local passwords'+((CFG.sso&&CFG.sso.enabled)?' + Entra SSO':'');
   server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+'] [auth: '+authMode+']'));
 })();
