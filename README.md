@@ -37,7 +37,7 @@ Linux: `systemd` or `pm2`). See section 7.
 | `akumar` | A. Kumar | QA Officer | `kumar123` |
 | `pdevi` | P. Devi | QA Officer | `devi123` |
 
-Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**, or sign in with **Microsoft 365** (Entra ID) instead.
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account.
 
 ---
 
@@ -65,7 +65,8 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 | Key | What it does |
 |-----|--------------|
 | `port` / `host` | Server address (default 3000 on all interfaces) |
-| `sso` | Microsoft 365 sign-in. Leave `tenantId`/`clientId` blank for the demo e-mail sign-in; fill both with your **Entra App registration** GUIDs to require real Microsoft Entra ID `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
+| `ldap` | **Local Active Directory** sign-in (LDAPS). Set `ldap.enabled` + the `LDAP_*` env vars and map AD groups to roles in `ldap.roleGroups` (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)). This is the recommended production auth. |
+| `sso` | Cloud **Microsoft Entra ID** sign-in (needs internet), disabled by default. Fill `tenantId`/`clientId` with your Entra App registration GUIDs to require real `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
 | `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
 | `storage` | Ignored when `DATABASE_URL` is set — the containerised deploy always uses **PostgreSQL**. Without `DATABASE_URL` the app uses a local `data/db.json` file (dev / single-box on-prem). |
 | `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
@@ -112,7 +113,7 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 
 ## 8. What's included (feature list)
 
-Tablet-first PWA (installable, offline + sync) · username/password + Microsoft 365 sign-in · role-based access ·
+Tablet-first PWA (installable, offline + sync) · local **Active Directory (LDAPS)** sign-in with AD-group→role mapping (+ local/break-glass accounts, optional Entra SSO) · role-based access ·
 machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
@@ -127,7 +128,7 @@ brute-force lockout** · **stage-in-sequence enforcement** · **required-field v
 **dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +
 **scheduled reports** · read-only **REST API keys** · outbound **webhooks** · Prometheus
 **/metrics** · **automatic rotating backups** + admin **restore** · **PostgreSQL** storage ·
-real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
+local **Active Directory** (LDAPS) SSO · smoke tests (`npm test`) · on-prem
 **deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ---

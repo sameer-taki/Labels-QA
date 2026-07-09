@@ -3,12 +3,10 @@ node_modules/
 
 # Runtime data (system of record — back up separately, do not commit)
 data/db.json
+data/db.json.bak
+data/db.json.tmp
 data/uploads/
 data/backups/
-data/db.sqlite
-data/db.sqlite-journal
-data/db.sqlite-wal
-data/db.sqlite-shm
 
 # Environment / secrets
 .env

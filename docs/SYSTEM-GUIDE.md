@@ -125,9 +125,13 @@ Four roles, increasing privilege: **QA Officer → Supervisor → Quality Manage
 > **Competency gating** (opt-in, Settings): when on, a stage sign-off is blocked unless the signer
 > has that stage in their **qualified stages** (set per user in Team & Access). Administrators bypass.
 
-**Sign-in:** username + password (salted **scrypt**), or **Microsoft 365 / Entra ID** SSO. With SSO
-unconfigured, the "Sign in with Microsoft 365" button runs a demo e-mail sign-in; unknown users get
-least-privilege **QA Officer**.
+**Sign-in:** local **Active Directory** (LDAPS) is the recommended production method — users enter
+their AD username + password, verified against a domain controller, and their **AD security groups**
+map to app roles (`ldap.roleGroups`; highest role wins, no matching group = denied). AD users are
+provisioned/refreshed automatically on each login and have no local password. Local accounts
+(salted **scrypt**) remain for a break-glass admin and are checked first, so an admin can always sign
+in even if the DC is down. Cloud **Microsoft Entra ID** SSO is also available but off by default.
+See `deploy/AD-SSO-SETUP.md`.
 
 ## 6. Data model
 
@@ -153,7 +157,8 @@ Photos and signatures are stored as files under `data/uploads/`.
 |---|---|
 | `port` / `host` | Server address (default `3000` on all interfaces) |
 | `orgName` | Organisation name shown in the UI and reports |
-| `sso` | Microsoft 365 sign-in. Blank `tenantId`/`clientId` = demo e-mail sign-in; fill both to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
+| `ldap` | Local Active Directory (LDAPS) sign-in — `enabled` + `LDAP_*` env + `roleGroups` group→role map (`deploy/AD-SSO-SETUP.md`) |
+| `sso` | Cloud Microsoft Entra ID sign-in (off by default). Fill `tenantId`/`clientId` to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
 | `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS) |
 | `notify.teamsWebhookUrl` | Microsoft Teams Incoming Webhook for alerts/digest |
 | `tolerances` | COF min/max, registration max (mm), barcode min grade — drive auto pass/fail and SPC limits |

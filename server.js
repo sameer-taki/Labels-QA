@@ -7,7 +7,8 @@ const crypto = require('crypto');
 
 const ROOT = __dirname;
 const CFG = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-const DATA_DIR = path.join(ROOT, 'data');
+// Data directory is overridable (GQA_DATA_DIR) so tests and alternate installs can isolate state.
+const DATA_DIR = process.env.GQA_DATA_DIR ? path.resolve(ROOT, process.env.GQA_DATA_DIR) : path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const UP_DIR = path.join(DATA_DIR, 'uploads');
 const PUB = path.join(ROOT, 'public');
@@ -19,6 +20,7 @@ const EMAIL = require('./integrations/email');
 const ENTRA = require('./integrations/entraId');
 const BACKUP = require('./integrations/backup');
 const WEBHOOKS = require('./integrations/webhooks');
+const LDAP = require('./integrations/ldap');
 const { makeStorage } = require('./integrations/storage');
 
 /* ---------- runtime config (env overrides config.json for container deploys) ---------- */
@@ -69,7 +71,22 @@ function saveDB() {
 }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 64).toString('hex'); }
 function checkPw(u, pw) { if (!u || !u.passHash) return false; const h = hashPw(pw, u.salt); return h.length === u.passHash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(u.passHash)); }
-function mkUser(id, name, role, pw, qs, email) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt), qualifiedStages: Array.isArray(qs) ? qs : [], email: String(email||'').toLowerCase() }; }
+function mkUser(id, name, role, pw, qs, email) { const salt = crypto.randomBytes(16).toString('hex'); return { id, name, role, salt, passHash: hashPw(pw, salt), qualifiedStages: Array.isArray(qs) ? qs : [], email: String(email||'').toLowerCase(), source: 'local' }; }
+/* Create/refresh a user provisioned from Active Directory. AD is the source of truth for their
+   role + stage competencies (re-applied on every login); they have NO local password so they can
+   only sign in via AD, and their tokens skip the password-version check. */
+function upsertDirectoryUser(adUser, role, stages) {
+  let u = DB.users.find(x => x.id === adUser.id);
+  if (!u) { u = { id: adUser.id, qualifiedStages: [] }; DB.users.push(u); }
+  u.source = 'ad';
+  u.name = adUser.name || u.name || adUser.id;
+  u.email = String(adUser.email || '').toLowerCase();
+  u.role = role;
+  u.qualifiedStages = Array.isArray(stages) ? stages : [];
+  delete u.passHash; delete u.salt; // directory-managed: never a local password
+  u.lastLogin = new Date().toISOString();
+  return u;
+}
 
 /* Canonical master-data defaults (shared by seedDB and the migration backfill). */
 const DEFAULT_PRODUCT_TYPES = ['Pressure Sensitive Adhesive Labels','Starkist Paper Labels','Flexible Packaging- Noodles Inner','Flexible Packaging- Noodles Outer','Flexible Packaging- Noodles Tastemaker Sachets','Tissue Wrap','Wrap Around Labels- Non Adhesive','Starkist Pouch Labels','Paper Labels-Adhesive','Paper Bags','LD Shrink','PET G Shrink','Others (please state)'];
@@ -275,7 +292,7 @@ function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=com
 /* Stage-1 setup-template support: machine/product-keyed default settings. */
 const TEMPLATE_SETTING_KEYS=['unwinderTension','infeedTension','outfeedTension','rewindTension','machineSpeed','corona1','corona2','corona3','corona4'];
 function cleanTemplate(b){ const machines=(DB.masterdata&&DB.masterdata.machines)||{}; const pts=(DB.masterdata&&DB.masterdata.productTypes)||[];
-  const machine=(b.machine&&machines[b.machine])?b.machine:''; const productType=pts.includes(b.productType)?b.productType:'';
+  const machine=(b.machine&&Object.prototype.hasOwnProperty.call(machines,b.machine)&&machines[b.machine])?b.machine:''; const productType=pts.includes(b.productType)?b.productType:'';
   const s=b.settings||{}; const settings={};
   TEMPLATE_SETTING_KEYS.forEach(k=>{ settings[k]=String(s[k]==null?'':s[k]); });
   settings.materials=Array.isArray(s.materials)?s.materials.map(m=>({materialType:String((m&&m.materialType)||''),gauge:String((m&&m.gauge)||''),grammage:String((m&&m.grammage)||''),dyne:String((m&&m.dyne)||''),supplier:String((m&&m.supplier)||''),batch:String((m&&m.batch)||'')})):[];
@@ -304,6 +321,7 @@ function stage3WasteKg(s3){ s3=s3||{};
   return w; }
 const USER_ROLES = ['QA Officer','Supervisor','Quality Manager','Administrator'];
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+function machineExists(m){ return typeof m==='string' && !!DB.masterdata && !!DB.masterdata.machines && Object.prototype.hasOwnProperty.call(DB.masterdata.machines, m) && !!DB.masterdata.machines[m]; }
 function canManageUsers(u){ return !!u && (u.role==='Administrator' || u.role==='Quality Manager'); }
 function isManager(u){ return !!u && ['Supervisor','Quality Manager','Administrator'].includes(u.role); }
 function isAdmin(u){ return !!u && u.role==='Administrator'; }
@@ -388,14 +406,20 @@ function csvCell(v){ v=(v==null?'':String(v)); if(/^[=+\-@\t\r]/.test(v)) v="'"+
 /* Block obvious SSRF targets for admin-configured outbound URLs (webhooks/Teams): loopback,
    link-local incl. the 169.254.169.254 cloud-metadata endpoint, and 0.0.0.0. Other private LAN
    ranges are allowed because legitimate on-prem webhooks live there. */
+function blockedV4(ip){ return /^0\.0\.0\.0$|^127\.|^169\.254\./.test(ip); } // 0.0.0.0, loopback, link-local/metadata
 function isSafeOutboundUrl(raw){
-  let h; try{ h=new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g,''); }catch(e){ return false; }
+  let h; try{ h=new URL(raw).hostname.toLowerCase(); }catch(e){ return false; }
+  h=h.replace(/^\[|\]$/g,'').replace(/\.$/,''); // strip IPv6 brackets and any trailing dot (localhost.)
   if(!h) return false;
+  // IPv4-mapped IPv6 — dotted (::ffff:127.0.0.1) or hex (::ffff:7f00:1) — evaluate the embedded v4
+  let m=h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i); if(m && blockedV4(m[1])) return false;
+  m=h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if(m){ const hi=parseInt(m[1],16), lo=parseInt(m[2],16); if(blockedV4([(hi>>8)&255,hi&255,(lo>>8)&255,lo&255].join('.'))) return false; }
   if(h==='localhost'||h.endsWith('.localhost')||h==='metadata.google.internal') return false;
-  if(h==='0.0.0.0'||h==='::1'||h==='::') return false;
-  if(/^127\./.test(h)) return false;               // loopback
-  if(/^169\.254\./.test(h)) return false;          // link-local + cloud metadata
-  if(/^(fe80:|fc00:|fd00:)/.test(h)) return false; // IPv6 link-local / unique-local
+  if(h==='::1'||h==='::'||h==='0') return false;
+  if(/^\d+\.\d+\.\d+\.\d+$/.test(h) && blockedV4(h)) return false;
+  if(/^f[cd][0-9a-f]{2}:/i.test(h)) return false;  // fc00::/7 unique-local (fc00–fdff)
+  if(/^fe[89ab][0-9a-f]:/i.test(h)) return false;  // fe80::/10 link-local (fe80–febf)
   return true;
 }
 /* Collision-resistant record id: time component keeps them sortable, random suffix prevents
@@ -429,16 +453,30 @@ async function api(req, res, url) {
       return send(res,401,{error:'No id_token supplied'});
     }
     const username = String(b.username||'').trim().toLowerCase();
+    const password = String(b.password||'');
     const key = loginKeyOf(req, username);
     const lock = loginLockedSec(key);
     if (lock) return send(res,429,{error:'Too many failed attempts. Try again in about '+Math.ceil(lock/60)+' min.'}, { 'Retry-After':String(lock) });
-    const u = DB.users.find(x=>x.id===username);
-    if (!u || !checkPw(u, String(b.password||''))) {
-      const r = loginRecordFail(key);
-      audit(null,'login-fail','', username+(r.lockUntil?' — locked out':' (attempt '+r.count+')')); saveDB();
-      return send(res,401,{error:'Invalid username or password'});
+    const recordFail = (tag) => { const r=loginRecordFail(key); audit(null,'login-fail','', username+(tag||'')+(r.lockUntil?' — locked out':' (attempt '+r.count+')')); saveDB(); };
+    // Local (break-glass) accounts have a local password and source!=='ad'. They are checked
+    // locally and take precedence, so an admin can always sign in even if the DC is unreachable.
+    const localU = DB.users.find(x=>x.id===username && x.source!=='ad' && x.passHash);
+    if (localU) {
+      if (!checkPw(localU, password)) { recordFail(''); return send(res,401,{error:'Invalid username or password'}); }
+      loginClear(key); audit(localU,'login'); return send(res,200,{ token:issueToken(localU), user:pubUser(localU) });
     }
-    loginClear(key); audit(u,'login'); return send(res,200,{ token:issueToken(u), user:pubUser(u) });
+    // Otherwise authenticate against local Active Directory (if configured).
+    if (LDAP.isEnabled(CFG)) {
+      const r = await LDAP.authenticate(CFG, username, password);
+      if (!r.ok) { recordFail(' (AD)'); return send(res,401,{error:'Invalid username or password'}); }
+      const role = LDAP.mapRole(CFG, r.user.groups);
+      if (!role) { audit(null,'login-denied','', username+' (AD: no Golden QA access group)'); saveDB(); return send(res,403,{error:'Your account is not authorized for Golden QA. Ask an administrator to add you to a Golden QA access group.'}); }
+      const u = upsertDirectoryUser(r.user, role, LDAP.mapStages(CFG, r.user.groups));
+      loginClear(key); audit(u,'login','','via Active Directory'); saveDB();
+      return send(res,200,{ token:issueToken(u), user:pubUser(u) });
+    }
+    recordFail('');
+    return send(res,401,{error:'Invalid username or password'});
   }
   if (seg[0]==='config' && method==='GET') {
     // Only advertise SSO when it can actually complete: in production the demo e-mail path is
@@ -454,7 +492,7 @@ async function api(req, res, url) {
 
   if (seg[0]==='me' && seg[1]==='password' && method==='POST') {
     const dbu = DB.users.find(u=>u.id===user.id);
-    if(!dbu) return send(res,400,{error:'This account signs in via Microsoft 365 — manage its password in Microsoft.'});
+    if(!dbu || !dbu.passHash) return send(res,400,{error:'This account signs in via your organisation directory (Active Directory / Microsoft) — change its password there.'});
     const b = await readBody(req);
     if(!checkPw(dbu, String(b.current||''))) return send(res,401,{error:'Current password is incorrect'});
     if(String(b.new||'').length<6) return send(res,400,{error:'New password must be at least 6 characters'});
@@ -476,7 +514,7 @@ async function api(req, res, url) {
     const b = await readBody(req);
     const jobNo=String(b.jobNo||'').trim();
     if(!jobNo||!String(b.machine||'').trim()) return send(res,400,{error:'jobNo and machine required'});
-    if(!(DB.masterdata.machines && DB.masterdata.machines[b.machine])) return send(res,400,{error:'Unknown machine — pick one from master data'});
+    if(!machineExists(b.machine)) return send(res,400,{error:'Unknown machine — pick one from master data'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
     const job={ jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     applyTemplateToJob(job); // pre-fill Stage 1 defaults from the best-matching press/product template
@@ -497,7 +535,7 @@ async function api(req, res, url) {
     if(!j) return send(res,404,{error:'Job not found'});
     const b=await readBody(req);
     ['customer','product','description','productType','itemCode'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
-    if(b.machine && DB.masterdata.machines[b.machine] && completedStages(j)===0) j.machine=b.machine;
+    if(b.machine && machineExists(b.machine) && completedStages(j)===0) j.machine=b.machine;
     audit(user,'edit-job',j.jobNo); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='DELETE') {
@@ -853,15 +891,20 @@ async function api(req, res, url) {
 
   return send(res,404,{error:'Unknown API route'});
 }
-function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'' }; }
+function pubUser(u){ return { id:u.id, name:u.name, role:u.role, qualifiedStages:Array.isArray(u.qualifiedStages)?u.qualifiedStages:[], email:u.email||'', source:u.source||'local' }; }
 /* Resolve a verified SSO e-mail to a user: known users keep their role; unknown domain
    users get least-privilege QA Officer (carried in the signed token, not persisted to DB). */
 /* Map a verified SSO e-mail to a local account by its EXPLICIT email field only — never by the
    e-mail localpart, which previously let e.g. admin@anything inherit the local 'admin' account.
    An unmatched (but domain-allowed) identity gets least-privilege QA Officer, carried only in the
    signed token and never persisted. Admins grant elevated SSO access by setting a user's email. */
-function ssoUser(email, name){ const em=String(email||'').toLowerCase(); const id=em.split('@')[0];
-  return DB.users.find(u=>u.email && u.email.toLowerCase()===em) || { id, name:name||id, role:'QA Officer' }; }
+function ssoUser(email, name){ const em=String(email||'').toLowerCase();
+  const match=DB.users.find(u=>u.email && u.email.toLowerCase()===em);
+  if(match) return match;
+  // Synthetic least-privilege identity for an unmatched SSO user. The id is the FULL e-mail so it can
+  // never collide with a local account id (those are sanitized to [a-z0-9._-], no '@') — otherwise
+  // userByToken() would re-resolve the token's uid to a same-named local account and inherit its role.
+  return { id:em, name:name||em.split('@')[0], role:'QA Officer' }; }
 function verifySso(email){ if(!email) return null; const dom='@'+CFG.sso.allowedDomain; if(!String(email).toLowerCase().endsWith(dom)) return null; return ssoUser(email); }
 
 function analytics(opts){
@@ -1102,7 +1145,8 @@ process.on('SIGINT', ()=>shutdown('SIGINT'));
   if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: process.env.BACKUP_DIR || path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
   const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
   const repTimer = setInterval(maybeSendScheduledReport, 60*60000); if (repTimer.unref) repTimer.unref(); maybeSendScheduledReport();
-  server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+']'));
+  const authMode = LDAP.isEnabled(CFG) ? 'Active Directory (LDAPS) + local' : 'local passwords'+((CFG.sso&&CFG.sso.enabled)?' + Entra SSO':'');
+  server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+'] [auth: '+authMode+']'));
 })();
 
 module.exports = { server };

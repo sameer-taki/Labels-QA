@@ -33,6 +33,12 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
       BACKUP_DIR: /backups
       TZ: ${TZ:-Pacific/Fiji}
+      # Local Active Directory sign-in (optional). Leave LDAP_ENABLED=false for local accounts only.
+      LDAP_ENABLED: ${LDAP_ENABLED:-false}
+      LDAP_URL: ${LDAP_URL:-}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
     volumes:
       - goldenqa_uploads:/app/data/uploads
       - goldenqa_backups:/backups:ro

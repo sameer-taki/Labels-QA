@@ -157,6 +157,9 @@ async function showLogin(){
   if(u) u.value=""; if(p) p.value="";
   $("#pwLogin").onclick=doLogin;
   $("#ssoLogin").onclick=doSso;
+  // Cloud Microsoft 365 button is shown only when Entra SSO is enabled. With local Active Directory
+  // (or plain local accounts) users sign in with the username/password form above.
+  try{ const cfg=await (await fetch("/api/config")).json(); const on=!!(cfg&&cfg.sso&&cfg.sso.enabled); const b=$("#ssoLogin"); if(b&&b.parentElement) b.parentElement.style.display=on?"":"none"; }catch(e){}
   if(u) u.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); if(p) p.focus(); } };
   if(p) p.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLogin(); } };
   if(u) u.focus();
@@ -982,7 +985,7 @@ function myAccount(){
       <div class="field"><label>Confirm new password</label><input id="pw_cf" type="password" autocomplete="new-password"></div>
     </div>
     <div class="row-actions"><button class="btn gold" onclick="changePassword()">Update password</button></div>
-    <p class="sub" style="margin-top:8px">Signed in with Microsoft 365? Manage your password in your Microsoft account instead.</p>
+    <p class="sub" style="margin-top:8px">Signed in via Active Directory or Microsoft? Change your password in your directory account — not here.</p>
     <div class="row-actions" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn ghost" onclick="logout()">Sign out</button></div></div>`;
 }
 async function changePassword(){ const cur=val("pw_cur"), nw=val("pw_new"), cf=val("pw_cf");
@@ -995,7 +998,7 @@ function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
     <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
-    <div class="field"><label>E-mail (for Microsoft 365 sign-in)</label><input id="u_email" type="email" autocapitalize="none" value="${u?esc(u.email||''):''}" placeholder="e.g. jsmith@golden.com.fj"></div>
+    <div class="field"><label>E-mail (optional; matches a Microsoft/Entra SSO identity)</label><input id="u_email" type="email" autocapitalize="none" value="${u?esc(u.email||''):''}" placeholder="e.g. jsmith@golden.com.fj"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
     <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${[1,2,3,4].map(s=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${s}" ${u&&(u.qualifiedStages||[]).map(Number).includes(s)?'checked':''} style="width:auto;min-height:0;margin-right:6px">Stage ${s}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
     <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>

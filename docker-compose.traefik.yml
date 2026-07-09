@@ -33,6 +33,12 @@ services:
       # The app reads this directory (mounted read-only below) to report the latest DB dump.
       BACKUP_DIR: /backups
       TZ: ${TZ:-Pacific/Fiji}
+      # Local Active Directory sign-in (optional). Leave LDAP_ENABLED=false for local accounts only.
+      LDAP_ENABLED: ${LDAP_ENABLED:-false}
+      LDAP_URL: ${LDAP_URL:-}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-}
+      LDAP_BIND_DN: ${LDAP_BIND_DN:-}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
     volumes:
       # Uploaded photos/signatures - the only app-written persistent data in Postgres mode.
       - goldenqa_uploads:/app/data/uploads
