@@ -58,6 +58,24 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 3. **Sheeting / Slitting** — PRD002
 4. **Finishing & Release** — F-038-A (mandatory hourly checks, final release decision)
 
+### Other digitised forms (not tied to a Job #)
+
+- **F-009 Calibration Recording Form** — recorded against each item in the **Equipment & Calibration**
+  register: reference-vs-machine-output readings, pass/fail, sticker, next-due and out-of-service.
+  The full **calibration history is extractable at any time** (per-item view, CSV, and an Excel sheet).
+- **F-012-G Pre-Operational Hygiene Checklist** and **F-013B GMP Checklist** — daily standalone
+  **Checklists** with two-person sign-off (Completed by → Verified by). Checklist items are
+  **admin-editable** (Settings → Checklist forms); F-013B ships with its items blank until the source
+  form is loaded.
+
+### Amendments History
+
+Every entry and change is recorded in a tamper-evident (HMAC-chained) **Amendments History** — who,
+when, and the **field-level before → value → after**. Data stays editable (with a break-glass reality
+for the floor), but nothing changes without a traceable record. Filter by record/job/date and export
+to CSV. Open a single record's history via the **Amendments** button on any job, CAPA, NCR, equipment
+item or checklist.
+
 ---
 
 ## 4. Configuration — `config.json`
@@ -121,8 +139,11 @@ Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · **A
 import · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
 effectiveness check) · **NCR** non-conformance reports (promote to CAPA) · **equipment &
 calibration register** (due/overdue tracking) · **SPC** control charts (Cp/Cpk) · **supplier
-scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **tamper-evident
-(HMAC-chained) audit trail** with one-click integrity check · admin master-data editor ·
+scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **standalone checklists**
+(hygiene / GMP) with admin-editable items and two-person sign-off · **F-009 calibration recording**
+with extractable calibration history (CSV/Excel) · **Amendments History** — tamper-evident
+(HMAC-chained), field-level who/when/before→after, filterable + exportable, per-record drill-down ·
+admin master-data editor ·
 **user management** (add/edit, password reset) · **training/competency gating** · **login
 brute-force lockout** · **stage-in-sequence enforcement** · **required-field validation** ·
 **dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +

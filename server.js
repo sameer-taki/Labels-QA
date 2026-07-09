@@ -47,6 +47,8 @@ async function loadDB() {
   if (!Array.isArray(DB.ncrs)) DB.ncrs = [];
   if (!Array.isArray(DB.equipment)) DB.equipment = [];
   if (!Array.isArray(DB.templates)) DB.templates = [];
+  if (!Array.isArray(DB.checklistDefs)) DB.checklistDefs = seedChecklistDefs(); // pre-load the standard SQF checklist forms
+  if (!Array.isArray(DB.checklists)) DB.checklists = [];
   if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
   if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
   if (!Array.isArray(DB.audit)) DB.audit = [];
@@ -144,6 +146,8 @@ function seedDB() {
     ncrs: adminPass ? [] : seedNcrs(),
     equipment: adminPass ? [] : seedEquipment(),
     templates: adminPass ? [] : seedTemplates(),
+    checklistDefs: seedChecklistDefs(), // the standard SQF checklist forms ship in every install
+    checklists: [],
     apikeys: [],
     webhooks: [],
     audit: [ (function(){ const e={ ts:new Date().toISOString(), user:'system', action:'seed', jobNo:'', detail:'Database initialised' }; e.hash=auditHash('', e); return e; })() ],
@@ -231,6 +235,37 @@ function seedTemplates(){ const now='2026-06-20T00:00:00.000Z';
         stations:[{group:0,name:'1',uvSetting:'100%',anilox:'360',cylinderTeeth:'120',inkType:'',inkBatch:''}] } }
   ];
 }
+/* Standard SQF checklist forms. Items are admin-editable (Settings → Checklist forms). F-013B's
+   line items are a placeholder until the source form is provided; an admin fills them in the app. */
+function seedChecklistDefs(){ const now='2026-07-09T00:00:00.000Z';
+  const items = arr => arr.map((label,i)=>({ key:'i'+(i+1), label }));
+  return [
+    { id:'CL-F012G', code:'F-012-G', title:'Pre-Operational Hygiene Checklist', frequency:'daily',
+      responseType:'satisfactory', hasCorrectiveAction:true, requireVerify:true, active:true, createdBy:'system', createdAt:now, updatedAt:now,
+      items: items([
+        'Floors/walls free of cracks, holes, humps, moldy growth, or rust formations/spots.',
+        'All cabling fully secured and sealed with conduits. All gaps around cabling entries fully sealed.',
+        'Food Packaging Manufacturing areas clean, tidy and floor/tables free of any glass or similar materials.',
+        'Food contact surfaces clean and sanitized.',
+        'All machines/equipment, WIP moving pallet lifting equipment clean and free of temporary fixes.',
+        'Production areas clean, tidy and floor/tables free of any glass or similar materials. No wood structures stored.',
+        'Hand washing facilities clean, hygienic and accessible with soap and hand dryer.',
+        'All sanitation points in working conditions with adequate sanitizing gels.',
+        'No evidence of pests. All bait stations in good condition.',
+        'All packaging material stored safely to avoid contamination.',
+        'Staff amenities are clean and in hygienic condition.',
+        'All waste bins free of wastes prior to daily operations, clean & free of debris, vermin and pest.',
+        'All fixed hard plastic and glass objects are in good condition — free of cracks.',
+        'All drinking water stations clean and hygienic. No unauthorized cups or water bottles in use.',
+        'All chemical containers are properly labeled.',
+        'Finished reels in packing area clearly segregated and labelled to avoid product cross contamination.',
+        'All stock reels are clearly labelled and packed, stored in designated area.'
+      ]) },
+    { id:'CL-F013B', code:'F-013B', title:'GMP Checklist', frequency:'daily',
+      responseType:'satisfactory', hasCorrectiveAction:true, requireVerify:true, active:true, createdBy:'system', createdAt:now, updatedAt:now,
+      items: [] } // TODO: populate from the F-013B source form (Settings → Checklist forms)
+  ];
+}
 
 /* ---------- helpers ---------- */
 /* Stateless signed session tokens (HMAC). No server-side session store, so logins
@@ -261,13 +296,64 @@ function fireEvent(event, payload){
    and is caught by verifyAuditChain(). DB.auditAnchor keeps the hash of the last
    pruned entry so the chain stays verifiable after the 5000-entry cap trims the head.
    Strength depends on SECRET_KEY being secret (enforced in production). */
-function auditHash(prevHash, e){ return crypto.createHmac('sha256', TOKEN_SECRET).update(String(prevHash||'')+'|'+JSON.stringify([e.ts,e.user,e.action,e.jobNo,e.detail])).digest('hex'); }
-function audit(user, action, jobNo, detail) {
+/* v2 entries also chain recordType/recordId/changes so the field-level before/after values are
+   themselves tamper-evident. Legacy entries (no e.v) keep the original 5-tuple so the existing
+   chain stays valid across the upgrade. */
+function auditHash(prevHash, e){
+  const tuple = e && e.v >= 2
+    ? [e.ts, e.user, e.action, e.jobNo, e.detail, e.recordType||'', e.recordId||'', e.changes||[]]
+    : [e.ts, e.user, e.action, e.jobNo, e.detail];
+  return crypto.createHmac('sha256', TOKEN_SECRET).update(String(prevHash||'')+'|'+JSON.stringify(tuple)).digest('hex');
+}
+const AUDIT_MAX = Number(process.env.AUDIT_MAX) || 20000; // retain more history; export for long-term archival
+/* audit(user, action, jobNo, detail)  — legacy positional form (still supported), OR
+   audit(user, action, { recordType, recordId, jobNo, detail, changes }) — field-level amendment. */
+function audit(user, action, arg3, arg4) {
+  const o = (arg3 && typeof arg3 === 'object') ? arg3 : { jobNo: arg3, detail: arg4 };
+  const changes = Array.isArray(o.changes) && o.changes.length ? o.changes : null;
   const prev = DB.audit.length ? (DB.audit[DB.audit.length-1].hash || '') : (DB.auditAnchor || '');
-  const e = { ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:jobNo||'', detail:detail||'' };
+  const e = { ts:new Date().toISOString(), user:user?user.id:'anon', action, jobNo:o.jobNo||'', detail:o.detail||'', v:2 };
+  if (o.recordType) e.recordType = String(o.recordType);
+  if (o.recordId) e.recordId = String(o.recordId);
+  if (changes) e.changes = changes;
   e.hash = auditHash(prev, e);
   DB.audit.push(e);
-  if (DB.audit.length>5000){ const drop=DB.audit.length-5000; DB.auditAnchor = DB.audit[drop-1].hash || DB.auditAnchor || ''; DB.audit = DB.audit.slice(drop); }
+  if (DB.audit.length>AUDIT_MAX){ const drop=DB.audit.length-AUDIT_MAX; DB.auditAnchor = DB.audit[drop-1].hash || DB.auditAnchor || ''; DB.audit = DB.audit.slice(drop); }
+}
+/* Field-level diff of two records → [{field, from, to}]. Scalars compared directly; arrays/objects
+   (repeating tables) summarised compactly so amendments stay readable. Skips internal/noisy keys. */
+function auditDiff(before, after, opts){
+  opts = opts || {};
+  const skip = new Set(['hash','updatedAt','history','passHash','salt'].concat(opts.skip||[]));
+  const out = []; const b = before||{}, a = after||{};
+  const keys = new Set([...Object.keys(b), ...Object.keys(a)]);
+  for (const k of keys){
+    if (skip.has(k)) continue;
+    const bv = b[k], av = a[k];
+    if (Array.isArray(bv) || Array.isArray(av) || (bv && typeof bv==='object') || (av && typeof av==='object')) {
+      const bs = JSON.stringify(bv==null?null:bv), as = JSON.stringify(av==null?null:av);
+      if (bs !== as) out.push({ field:k, from: summarise(bv), to: summarise(av) });
+    } else if (String(bv==null?'':bv) !== String(av==null?'':av)) {
+      out.push({ field:k, from: bv==null?'':bv, to: av==null?'':av });
+    }
+  }
+  return out;
+}
+function summarise(v){ if (Array.isArray(v)) return v.length+' row(s)'; if (v && typeof v==='object') return 'updated'; return v==null?'':v; }
+/* Filter the audit log by query params: recordId, jobNo, recordType, action, user, from, to (dates). */
+function filterAudit(url){
+  const q=k=>{ const v=url.searchParams.get(k); return v?String(v).toLowerCase():''; };
+  const recordId=q('recordId'), jobNo=q('jobNo'), recordType=q('recordType'), action=q('action'), userq=q('user'), from=q('from'), to=q('to');
+  return DB.audit.filter(e=>{
+    if(recordId && String(e.recordId||'').toLowerCase()!==recordId) return false;
+    if(jobNo && String(e.jobNo||'').toLowerCase()!==jobNo) return false;
+    if(recordType && String(e.recordType||'').toLowerCase()!==recordType) return false;
+    if(action && !String(e.action||'').toLowerCase().includes(action)) return false;
+    if(userq && String(e.user||'').toLowerCase()!==userq) return false;
+    if(from && String(e.ts||'').slice(0,10) < from) return false;
+    if(to && String(e.ts||'').slice(0,10) > to) return false;
+    return true;
+  });
 }
 function verifyAuditChain(){
   let prev = DB.auditAnchor || ''; let checked=0, legacy=0, sawHashed=false;
@@ -334,6 +420,36 @@ const WEBHOOK_EVENTS = ['job.released','job.hold','capa.opened','capa.closed','e
 const NCR_DISPOSITION = ['Use as is','Rework','Reject','Return to supplier','Scrap'];
 const NCR_STATUS = ['Open','Closed'];
 const CAPA_EFFECTIVENESS = ['','Pending','Verified','Not effective'];
+const CHECKLIST_FREQ = ['daily','shift','weekly','monthly','ad-hoc'];
+const CHECKLIST_RESPONSE = ['satisfactory','yesno']; // satisfactory = Yes/X (F-012/F-013B); yesno = Yes/No
+/* Sanitise a checklist definition (admin-managed form template). */
+function cleanChecklistDef(b){
+  const items = Array.isArray(b.items) ? b.items.map((it,i)=>{
+    const label = typeof it==='string' ? it : String((it&&it.label)||'');
+    const key = (it&&it.key)?String(it.key):('i'+(i+1));
+    return { key, label: label.trim() };
+  }).filter(it=>it.label) : [];
+  return {
+    code: String(b.code||'').trim(),
+    title: String(b.title||'').trim(),
+    frequency: CHECKLIST_FREQ.includes(b.frequency)?b.frequency:'daily',
+    responseType: CHECKLIST_RESPONSE.includes(b.responseType)?b.responseType:'satisfactory',
+    hasCorrectiveAction: b.hasCorrectiveAction!==false,
+    requireVerify: b.requireVerify!==false,
+    active: b.active!==false,
+    items
+  };
+}
+/* A completed checklist needs a date and an answered status for every item on its definition. */
+function validateChecklistComplete(def, sub){
+  const miss=[];
+  if(!String(sub.date||'').trim()) miss.push('Date');
+  if(!String(sub.completedByName||sub.completedBy||'').trim()) miss.push('Completed by');
+  const answered=new Set((sub.responses||[]).filter(r=>String(r.status||'').trim()).map(r=>r.itemKey));
+  const unanswered=(def.items||[]).filter(it=>!answered.has(it.key));
+  if(unanswered.length) miss.push(unanswered.length+' unanswered item(s)');
+  return miss;
+}
 
 /* date helpers (YYYY-MM-DD). "Today" is resolved in the plant's local timezone (TZ env or
    config.timezone, default Pacific/Fiji) so overdue/due-soon logic matches the shop floor and
@@ -349,9 +465,11 @@ function daysFromToday(s){ if(!isValidYmd(s)) return null; const d=new Date(s+'T
 function equipView(e){
   let nextDue='', calStatus='Unscheduled', daysToDue=null;
   if(e.active===false){ calStatus='Retired'; }
-  else if(isValidYmd(e.calibratedOn) && Number(e.calibrationIntervalDays)>0){
-    nextDue=addDaysYmd(e.calibratedOn, e.calibrationIntervalDays); daysToDue=daysFromToday(nextDue);
-    calStatus = daysToDue<0 ? 'Overdue' : (daysToDue<=CAL_DUE_SOON_DAYS ? 'Due soon' : 'OK');
+  else {
+    // An explicit next-due (recorded on the calibration form) wins; otherwise derive from interval.
+    if(isValidYmd(e.nextDueOverride)) nextDue=e.nextDueOverride;
+    else if(isValidYmd(e.calibratedOn) && Number(e.calibrationIntervalDays)>0) nextDue=addDaysYmd(e.calibratedOn, e.calibrationIntervalDays);
+    if(nextDue){ daysToDue=daysFromToday(nextDue); calStatus = daysToDue<0 ? 'Overdue' : (daysToDue<=CAL_DUE_SOON_DAYS ? 'Due soon' : 'OK'); }
   }
   return Object.assign({}, e, { nextDue, calStatus, daysToDue });
 }
@@ -534,9 +652,10 @@ async function api(req, res, url) {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
     const b=await readBody(req);
+    const jBefore={ customer:j.customer, product:j.product, description:j.description, productType:j.productType, itemCode:j.itemCode, machine:j.machine };
     ['customer','product','description','productType','itemCode'].forEach(k=>{ if(typeof b[k]==='string') j[k]=b[k]; });
     if(b.machine && machineExists(b.machine) && completedStages(j)===0) j.machine=b.machine;
-    audit(user,'edit-job',j.jobNo); saveDB(); return send(res,200,j);
+    audit(user,'edit-job',{ recordType:'job', recordId:j.jobNo, jobNo:j.jobNo, changes:auditDiff(jBefore, j) }); saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='DELETE') {
     if(!canManageUsers(user)) return send(res,403,{error:'Only a Quality Manager or Administrator can delete jobs'});
@@ -558,6 +677,7 @@ async function api(req, res, url) {
         return send(res,403,{error:'You are not qualified to sign off Stage '+n+'. Ask an administrator to add this stage to your competencies.'});
     }
     const wasReleased = jobStatus(j)==='Released';
+    const stageBefore = j['stage'+n] || {};
     j['stage'+n] = b.data || {};
     // Fire job.released on the STATUS TRANSITION into Released (via any stage), exactly once —
     // not merely when stage 4 is saved. Avoids a missing event when re-completed via stages 1-3
@@ -569,7 +689,8 @@ async function api(req, res, url) {
       const onHold=parseFloat(b.data.quantityOnHold||'')||0;
       if(onHold>0){ alertAll('Job '+j.jobNo+': '+onHold+' units on hold at line clearance','Disposition: '+(b.data.disposition||'?')+' — '+(b.data.reasonForRejection||'')); fireEvent('job.hold',{ jobNo:j.jobNo, product:j.product, qty:onHold, disposition:b.data.disposition||'' }); }
     }
-    audit(user,'save-stage'+n,j.jobNo, b.data&&b.data._done?'completed':'draft'); saveDB(); return send(res,200,j);
+    audit(user,'save-stage'+n,{ recordType:'job', recordId:j.jobNo, jobNo:j.jobNo, detail:'Stage '+n+' '+(b.data&&b.data._done?'completed':'draft'), changes:auditDiff(stageBefore, j['stage'+n], {skip:['_done']}) });
+    saveDB(); return send(res,200,j);
   }
   if (seg[0]==='jobs' && seg[2]==='hold' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can place a job on hold'});
@@ -593,7 +714,7 @@ async function api(req, res, url) {
   }
 
   if (seg[0]==='masterdata' && method==='GET') return send(res,200, DB.masterdata);
-  if (seg[0]==='masterdata' && method==='PUT') { if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can change master data'}); const b=await readBody(req); DB.masterdata=Object.assign(DB.masterdata,b); audit(user,'update-masterdata'); saveDB(); return send(res,200,DB.masterdata); }
+  if (seg[0]==='masterdata' && method==='PUT') { if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can change master data'}); const b=await readBody(req); const changes=Object.keys(b||{}).map(k=>({field:k, from:summarise(DB.masterdata[k]), to:summarise(b[k])})); DB.masterdata=Object.assign(DB.masterdata,b); audit(user,'update-masterdata',{ recordType:'masterdata', recordId:'masterdata', detail:Object.keys(b||{}).join(', '), changes }); saveDB(); return send(res,200,DB.masterdata); }
 
   if (seg[0]==='admin' && seg[1]==='users') {
     const uid = seg[2] ? decodeURIComponent(seg[2]).toLowerCase() : null;
@@ -704,7 +825,24 @@ async function api(req, res, url) {
   }
 
   if (seg[0]==='audit' && seg[1]==='verify' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, verifyAuditChain()); }
-  if (seg[0]==='audit' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, DB.audit.slice(-300).reverse()); }
+  if (seg[0]==='audit' && seg[1]==='export.csv' && method==='GET') {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    const rows=[['Timestamp','User','Action','Record Type','Record ID','Job #','Field','From','To','Detail']];
+    filterAudit(url).forEach(e=>{
+      const base=[e.ts,e.user,e.action,e.recordType||'',e.recordId||'',e.jobNo||''];
+      if(Array.isArray(e.changes)&&e.changes.length) e.changes.forEach(c=>rows.push([...base, c.field, c.from, c.to, e.detail||'']));
+      else rows.push([...base, '', '', '', e.detail||'']);
+    });
+    const csv='﻿'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+    audit(user,'export-audit',{ detail:(rows.length-1)+' rows' });
+    res.writeHead(200,{ 'Content-Type':'text/csv; charset=utf-8', 'Content-Disposition':'attachment; filename="golden-qa-amendments-history.csv"', 'Cache-Control':'no-store' });
+    return res.end(csv);
+  }
+  if (seg[0]==='audit' && method==='GET') {
+    if(!isManager(user)) return send(res,403,{error:'Not permitted'});
+    const limit=Math.min(Number(url.searchParams.get('limit'))||300, 5000);
+    return send(res,200, filterAudit(url).slice(-limit).reverse());
+  }
 
   if (seg[0]==='capas' && method==='GET' && !seg[1]) {
     let list = (DB.capas||[]).slice();
@@ -730,6 +868,7 @@ async function api(req, res, url) {
     const c=(DB.capas||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!c) return send(res,404,{error:'CAPA not found'});
     const b=await readBody(req);
     if(typeof b.dueDate==='string' && b.dueDate.trim() && !isValidYmd(b.dueDate.trim())) return send(res,400,{error:'Due date must be a valid YYYY-MM-DD date'});
+    const cBefore=JSON.parse(JSON.stringify(c));
     const prevDue=c.dueDate;
     ['title','source','rootCause','correctiveAction','preventiveAction','owner','dueDate'].forEach(k=>{ if(typeof b[k]==='string') c[k]=(k==='dueDate'?b[k].trim():b[k]); });
     if(b.severity && CAPA_SEVERITY.includes(b.severity)) c.severity=b.severity;
@@ -747,7 +886,7 @@ async function api(req, res, url) {
     if(c.dueDate!==prevDue){ c.escalated=false; c.escalatedAt=''; }
     if(b.effectiveness!=null && CAPA_EFFECTIVENESS.includes(b.effectiveness)){ c.effectiveness=b.effectiveness; if(b.effectiveness==='Verified'||b.effectiveness==='Not effective'){ c.verifiedBy=user.id; c.verifiedAt=new Date().toISOString(); } else { c.verifiedBy=''; c.verifiedAt=''; } }
     c.updatedAt=new Date().toISOString();
-    audit(user, c.status==='Closed'?'capa-close':'capa-update', c.jobNo, c.id); saveDB(); return send(res,200,c);
+    audit(user, c.status==='Closed'?'capa-close':'capa-update', { recordType:'capa', recordId:c.id, jobNo:c.jobNo, detail:c.id, changes:auditDiff(cBefore, c) }); saveDB(); return send(res,200,c);
   }
 
   if (seg[0]==='ncrs' && method==='GET' && !seg[1]) {
@@ -779,11 +918,12 @@ async function api(req, res, url) {
     if(!isManager(user)) return send(res,403,{error:'Not permitted'});
     const x=(DB.ncrs||[]).find(y=>y.id===decodeURIComponent(seg[1])); if(!x) return send(res,404,{error:'NCR not found'});
     const b=await readBody(req);
+    const xBefore=JSON.parse(JSON.stringify(x));
     ['jobNo','date','description'].forEach(k=>{ if(typeof b[k]==='string') x[k]=b[k]; });
     if(b.disposition && NCR_DISPOSITION.includes(b.disposition)) x.disposition=b.disposition;
     if(b.severity && CAPA_SEVERITY.includes(b.severity)) x.severity=b.severity;
     if(b.status && NCR_STATUS.includes(b.status)){ const wasClosed=x.status==='Closed'; x.status=b.status; if(x.status==='Closed'&&!wasClosed){ x.closedBy=user.id; x.closedAt=new Date().toISOString(); } if(x.status!=='Closed'){ x.closedBy=''; x.closedAt=''; } }
-    audit(user,'ncr-update',x.jobNo,x.id); saveDB(); return send(res,200,x);
+    audit(user,'ncr-update',{ recordType:'ncr', recordId:x.id, jobNo:x.jobNo, detail:x.id, changes:auditDiff(xBefore, x) }); saveDB(); return send(res,200,x);
   }
 
   if (seg[0]==='equipment' && method==='GET' && !seg[1]) {
@@ -791,6 +931,23 @@ async function api(req, res, url) {
     const fst=url.searchParams.get('status'); if(fst) list=list.filter(e=>e.calStatus===fst);
     const fty=url.searchParams.get('type'); if(fty) list=list.filter(e=>e.type===fty);
     return send(res,200, list);
+  }
+  // Full calibration history for one item — extractable at any time.
+  if (seg[0]==='equipment' && seg[1] && seg[2]==='history' && method==='GET') {
+    const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
+    return send(res,200, { id:e.id, name:e.name, model:e.model||'', serial:e.serial||'', history:(e.history||[]).slice().reverse() });
+  }
+  // All calibration events, every item, over time — CSV extract for auditors.
+  if (seg[0]==='equipment' && seg[1]==='calibration-history.csv' && method==='GET') {
+    const rows=[['Equipment ID','Name','Model','Serial','Date','Technician','Result','Readings (ref→output)','Sticker','Register Updated','Next Due','Out of Service','Comments']];
+    (DB.equipment||[]).forEach(e=>{ (e.history||[]).forEach(h=>{
+      const readings=(h.readings||[]).map(r=>r.reference+'→'+r.machineOutput).join('; ');
+      rows.push([e.id, e.name||'', e.model||'', e.serial||'', h.on||'', h.technician||h.by||'', h.result||'', readings, h.sticker||'', h.registerUpdated?'Yes':'', h.nextDue||'', h.outOfService||'', h.comments||h.notes||'']);
+    }); });
+    const csv='﻿'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+    audit(user,'export-calibration-history',{ detail:(rows.length-1)+' events' });
+    res.writeHead(200,{ 'Content-Type':'text/csv; charset=utf-8', 'Content-Disposition':'attachment; filename="golden-qa-calibration-history.csv"', 'Cache-Control':'no-store' });
+    return res.end(csv);
   }
   if (seg[0]==='equipment' && method==='POST' && !seg[1]) {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
@@ -800,33 +957,51 @@ async function api(req, res, url) {
     if(calOn && !isValidYmd(calOn)) return send(res,400,{error:'Calibration date must be a valid YYYY-MM-DD date'});
     const now=new Date().toISOString();
     const e={ id:genId('EQ'), name:String(b.name).trim(), type:EQUIP_TYPES.includes(b.type)?b.type:'Other',
-      identifier:String(b.identifier||'').trim(), machine:String(b.machine||'').trim(), location:String(b.location||'').trim(),
-      calibratedOn:calOn, calibrationIntervalDays:Number(b.calibrationIntervalDays)||0,
+      identifier:String(b.identifier||'').trim(), model:String(b.model||'').trim(), serial:String(b.serial||'').trim(),
+      machine:String(b.machine||'').trim(), location:String(b.location||'').trim(),
+      calibratedOn:calOn, calibrationIntervalDays:Number(b.calibrationIntervalDays)||0, nextDueOverride:'',
       owner:String(b.owner||'').trim(), notes:String(b.notes||''), active:true, createdBy:user.id, createdAt:now, updatedAt:now, history:[] };
-    DB.equipment.push(e); audit(user,'equip-add','',e.id+': '+e.name); saveDB(); return send(res,200,equipView(e));
+    DB.equipment.push(e); audit(user,'equip-add',{ recordType:'equipment', recordId:e.id, detail:e.id+': '+e.name, changes:auditDiff({}, e, {skip:['createdBy','createdAt','history','id']}) }); saveDB(); return send(res,200,equipView(e));
   }
   if (seg[0]==='equipment' && seg[1] && seg[2]==='calibrate' && method==='POST') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can record calibration'});
     const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
     const b=await readBody(req); const on=String(b.on||'').trim()||todayYmd();
     if(!isValidYmd(on)) return send(res,400,{error:'Calibration date must be a valid YYYY-MM-DD date'});
+    const nextDue=String(b.nextDue||'').trim(); if(nextDue && !isValidYmd(nextDue)) return send(res,400,{error:'Next due date must be a valid YYYY-MM-DD date'});
+    const outOfService=String(b.outOfService||'').trim(); if(outOfService && !isValidYmd(outOfService)) return send(res,400,{error:'Out-of-service date must be a valid YYYY-MM-DD date'});
     if(b.intervalDays!=null && Number(b.intervalDays)>0) e.calibrationIntervalDays=Number(b.intervalDays);
-    e.calibratedOn=on; e.active=true;
-    e.history=e.history||[]; e.history.push({ on, by:user.id, result:String(b.result||'Pass'), notes:String(b.notes||'') });
+    const result=String(b.result||'Pass'); const passed=result.toLowerCase().indexOf('fail')<0;
+    // F-009 Calibration Recording Form captured in full on the (append-only) history entry.
+    const entry={ on, by:user.id,
+      technician:String(b.technician||'').trim()||user.name||user.id,
+      result, passed,
+      readings: Array.isArray(b.readings)?b.readings.slice(0,10).map(r=>({ reference:String((r&&r.reference)||'').trim(), machineOutput:String((r&&r.machineOutput)||'').trim() })).filter(r=>r.reference||r.machineOutput):[],
+      sticker: ['Yes','No','N/A'].includes(b.sticker)?b.sticker:'',
+      reasonForFailure:String(b.reasonForFailure||'').trim(),
+      registerUpdated: !!b.registerUpdated,
+      nextDue, outOfService,
+      comments:String(b.comments||'').trim(), notes:String(b.notes||'').trim() };
+    e.calibratedOn=on; e.nextDueOverride=nextDue;
+    e.active = outOfService ? false : true; // taken out of service if a date is recorded
+    e.history=e.history||[]; e.history.push(entry);
     e.updatedAt=new Date().toISOString();
-    audit(user,'equip-calibrate','',e.id+' on '+on); fireEvent('equipment.calibrated',{ id:e.id, on, result:String(b.result||'Pass') }); saveDB(); return send(res,200,equipView(e));
+    audit(user,'equip-calibrate',{ recordType:'equipment', recordId:e.id, detail:e.id+' — '+result+' on '+on, changes:[{field:'calibration recorded', from:'', to:result+' on '+on+(entry.readings.length?(' ('+entry.readings.length+' readings)'):'')}] });
+    fireEvent('equipment.calibrated',{ id:e.id, on, result, passed }); saveDB(); return send(res,200,equipView(e));
   }
   if (seg[0]==='equipment' && seg[1] && method==='PUT') {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage equipment'});
     const e=(DB.equipment||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!e) return send(res,404,{error:'Equipment not found'});
     const b=await readBody(req);
-    if(typeof b.calibratedOn==='string' && b.calibratedOn.trim() && !isValidYmd(b.calibratedOn.trim())) return send(res,400,{error:'Calibration date must be a valid YYYY-MM-DD date'});
-    ['name','identifier','machine','location','owner','notes','calibratedOn'].forEach(k=>{ if(typeof b[k]==='string') e[k]=(k==='calibratedOn'?b[k].trim():b[k]); });
+    const eBefore=JSON.parse(JSON.stringify(e));
+    // calibratedOn is NOT editable here — it is set only through the calibrate flow so it always has a
+    // matching history entry (no silent change to the "last calibrated" date).
+    ['name','identifier','model','serial','machine','location','owner','notes'].forEach(k=>{ if(typeof b[k]==='string') e[k]=b[k]; });
     if(b.type && EQUIP_TYPES.includes(b.type)) e.type=b.type;
     if(b.calibrationIntervalDays!=null) e.calibrationIntervalDays=Number(b.calibrationIntervalDays)||0;
     if(typeof b.active==='boolean') e.active=b.active;
     e.updatedAt=new Date().toISOString();
-    audit(user,'equip-update','',e.id); saveDB(); return send(res,200,equipView(e));
+    audit(user,'equip-update',{ recordType:'equipment', recordId:e.id, detail:e.id, changes:auditDiff(eBefore, e) }); saveDB(); return send(res,200,equipView(e));
   }
 
   if (seg[0]==='templates' && method==='GET' && !seg[1]) {
@@ -850,6 +1025,76 @@ async function api(req, res, url) {
     if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage templates'});
     const i=(DB.templates||[]).findIndex(x=>x.id===decodeURIComponent(seg[1])); if(i<0) return send(res,404,{error:'Template not found'});
     const removed=DB.templates.splice(i,1)[0]; audit(user,'template-delete','',removed.id); saveDB(); return send(res,200,{ ok:true });
+  }
+
+  /* ----- Checklist DEFINITIONS (admin-managed form templates) ----- */
+  if (seg[0]==='checklist-defs' && method==='GET' && !seg[1]) return send(res,200, DB.checklistDefs||[]);
+  if (seg[0]==='checklist-defs' && method==='POST' && !seg[1]) {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
+    const c=cleanChecklistDef(await readBody(req)); if(!c.title) return send(res,400,{error:'A checklist title is required'});
+    const now=new Date().toISOString();
+    const d=Object.assign({ id:genId('CL'), createdBy:user.id, createdAt:now, updatedAt:now }, c);
+    DB.checklistDefs.push(d); audit(user,'checklist-def-add',{ recordType:'checklist-def', recordId:d.id, detail:d.code+': '+d.title }); saveDB(); return send(res,200,d);
+  }
+  if (seg[0]==='checklist-defs' && seg[1] && method==='PUT') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
+    const d=(DB.checklistDefs||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!d) return send(res,404,{error:'Checklist form not found'});
+    const before=JSON.parse(JSON.stringify(d)); const c=cleanChecklistDef(await readBody(req)); if(!c.title) return send(res,400,{error:'A checklist title is required'});
+    Object.assign(d, c, { updatedAt:new Date().toISOString() });
+    audit(user,'checklist-def-update',{ recordType:'checklist-def', recordId:d.id, detail:d.code+': '+d.title, changes:auditDiff(before, d) }); saveDB(); return send(res,200,d);
+  }
+  if (seg[0]==='checklist-defs' && seg[1] && method==='DELETE') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can manage checklist forms'});
+    const i=(DB.checklistDefs||[]).findIndex(x=>x.id===decodeURIComponent(seg[1])); if(i<0) return send(res,404,{error:'Checklist form not found'});
+    const removed=DB.checklistDefs.splice(i,1)[0]; audit(user,'checklist-def-delete',{ recordType:'checklist-def', recordId:removed.id, detail:removed.code }); saveDB(); return send(res,200,{ ok:true });
+  }
+
+  /* ----- Checklist SUBMISSIONS (dated records, two-person sign-off) ----- */
+  if (seg[0]==='checklists' && method==='GET' && !seg[1]) {
+    let list=(DB.checklists||[]).slice();
+    const fd=url.searchParams.get('defKey'); if(fd) list=list.filter(c=>c.defKey===fd);
+    const fs_=url.searchParams.get('status'); if(fs_) list=list.filter(c=>c.status===fs_);
+    const fdt=url.searchParams.get('date'); if(fdt) list=list.filter(c=>c.date===fdt);
+    return send(res,200, list.reverse());
+  }
+  if (seg[0]==='checklists' && method==='GET' && seg[1]) {
+    const c=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); return c?send(res,200,c):send(res,404,{error:'Checklist not found'});
+  }
+  if (seg[0]==='checklists' && method==='POST' && !seg[1]) {
+    const b=await readBody(req);
+    const def=(DB.checklistDefs||[]).find(d=>d.id===b.defKey || d.code===b.defKey); if(!def) return send(res,400,{error:'Unknown checklist form'});
+    const responses=Array.isArray(b.responses)?b.responses.map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||'') })).filter(r=>r.itemKey):[];
+    const markComplete = b.status==='Completed';
+    const sub={ id:genId('CHK'), defKey:def.id, code:def.code, title:def.title,
+      date:String(b.date||'').trim()||todayYmd(), shift:String(b.shift||'').trim(), area:String(b.area||'').trim(),
+      responses, comments:String(b.comments||'').trim(),
+      completedBy:user.id, completedByName:String(b.completedByName||'').trim()||user.name||user.id,
+      status: markComplete?'Completed':'Draft', verifiedBy:'', verifiedByName:'', verifiedAt:'',
+      createdBy:user.id, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
+    if(markComplete){ const miss=validateChecklistComplete(def, sub); if(miss.length) return send(res,400,{error:'Cannot complete — missing: '+miss.join(', '), missing:miss}); }
+    DB.checklists.push(sub); audit(user,'checklist-'+(markComplete?'complete':'save'),{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff({}, sub, {skip:['createdBy','createdAt','id','responses']}) }); saveDB(); return send(res,200,sub);
+  }
+  if (seg[0]==='checklists' && seg[1] && seg[2]==='verify' && method==='POST') {
+    if(!isManager(user)) return send(res,403,{error:'Only a Supervisor, Quality Manager or Administrator can verify a checklist'});
+    const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    if(sub.status!=='Completed') return send(res,409,{error:'Only a completed checklist can be verified'});
+    if(sub.completedBy===user.id) return send(res,403,{error:'A checklist must be verified by someone other than the person who completed it'});
+    sub.verifiedBy=user.id; sub.verifiedByName=user.name||user.id; sub.verifiedAt=new Date().toISOString(); sub.status='Verified'; sub.updatedAt=sub.verifiedAt;
+    audit(user,'checklist-verify',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:[{field:'status', from:'Completed', to:'Verified'}] }); saveDB(); return send(res,200,sub);
+  }
+  if (seg[0]==='checklists' && seg[1] && method==='PUT') {
+    const sub=(DB.checklists||[]).find(x=>x.id===decodeURIComponent(seg[1])); if(!sub) return send(res,404,{error:'Checklist not found'});
+    const def=(DB.checklistDefs||[]).find(d=>d.id===sub.defKey)||{items:[]};
+    const b=await readBody(req); const before=JSON.parse(JSON.stringify(sub));
+    if(Array.isArray(b.responses)) sub.responses=b.responses.map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||'') })).filter(r=>r.itemKey);
+    ['date','shift','area','comments'].forEach(k=>{ if(typeof b[k]==='string') sub[k]=b[k].trim(); });
+    if(b.status && ['Draft','Completed'].includes(b.status)){
+      if(b.status==='Completed'){ const miss=validateChecklistComplete(def, sub); if(miss.length) return send(res,400,{error:'Cannot complete — missing: '+miss.join(', '), missing:miss}); }
+      // Editing a verified/completed record re-opens it to Draft/Completed and clears verification.
+      sub.status=b.status; if(b.status!=='Verified'){ sub.verifiedBy=''; sub.verifiedByName=''; sub.verifiedAt=''; }
+    }
+    sub.updatedAt=new Date().toISOString();
+    audit(user,'checklist-update',{ recordType:'checklist', recordId:sub.id, detail:sub.code+' '+sub.date, changes:auditDiff(before, sub) }); saveDB(); return send(res,200,sub);
   }
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
@@ -1034,14 +1279,18 @@ function workbookXls(){
   const ml=m=>(DB.masterdata.machines&&DB.masterdata.machines[m]&&DB.masterdata.machines[m].label)||m;
   const jobs=DB.jobs.map(j=>{ const s4=j.stage4||{}; return [j.jobNo, j.customer||'', j.product||'', ml(j.machine), j.created||'', jobStatus(j), completedStages(j), s4._done?(s4.disposition||''):'', s4._done?(s4.quantityOnHold||''):'']; });
   const capas=(DB.capas||[]).map(c=>[c.id, c.jobNo||'', c.title||'', c.severity||'', c.status||'', c.owner||'', c.dueDate||'', c.effectiveness||'']);
-  const equip=(DB.equipment||[]).map(equipView).map(e=>[e.id, e.name||'', e.type||'', e.machine||'', e.calibratedOn||'', e.nextDue||'', e.calStatus]);
+  const equip=(DB.equipment||[]).map(equipView).map(e=>[e.id, e.name||'', e.type||'', e.model||'', e.serial||'', e.machine||'', e.calibratedOn||'', e.nextDue||'', e.calStatus]);
   const sup=suppliers().map(s=>[s.supplier, s.jobs, s.released, s.holdReject, s.fpy, s.defectKg, s.wasteKg]);
+  const calHist=[]; (DB.equipment||[]).forEach(e=>{ (e.history||[]).forEach(h=>{ calHist.push([e.id, e.name||'', e.model||'', e.serial||'', h.on||'', h.technician||h.by||'', h.result||'', (h.readings||[]).map(r=>r.reference+'→'+r.machineOutput).join('; '), h.sticker||'', h.registerUpdated?'Yes':'', h.nextDue||'', h.outOfService||'', h.comments||h.notes||'']); }); });
+  const chk=(DB.checklists||[]).map(c=>{ const bad=(c.responses||[]).filter(r=>r.status && r.status!=='Yes').length; return [c.code||'', c.title||'', c.date||'', c.shift||'', c.status||'', c.completedByName||c.completedBy||'', c.verifiedByName||c.verifiedBy||'', bad, c.comments||'']; });
   return '<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'+
     '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'+
     '<Styles><Style ss:ID="hdr"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0E2A47" ss:Pattern="Solid"/></Style></Styles>'+
     xlsSheet('Jobs',['Job #','Customer','Product','Machine','Created','Status','Stages','S4 Disposition','S4 Qty On-Hold'],jobs)+
     xlsSheet('CAPAs',['CAPA','Job','Title','Severity','Status','Owner','Due','Effectiveness'],capas)+
-    xlsSheet('Equipment',['ID','Name','Type','Machine','Last cal.','Next due','Status'],equip)+
+    xlsSheet('Equipment',['ID','Name','Type','Model','Serial','Machine','Last cal.','Next due','Status'],equip)+
+    xlsSheet('Calibration History',['Equipment ID','Name','Model','Serial','Date','Technician','Result','Readings (ref→output)','Sticker','Register Updated','Next Due','Out of Service','Comments'],calHist)+
+    xlsSheet('Checklists',['Code','Title','Date','Shift','Status','Completed by','Verified by','Unsatisfactory items','Comments'],chk)+
     xlsSheet('Suppliers',['Supplier','Jobs','Released','Hold/Rej','FPY %','Defect kg','Waste kg'],sup)+
     '</Workbook>';
 }

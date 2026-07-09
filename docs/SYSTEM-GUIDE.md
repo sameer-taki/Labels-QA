@@ -85,9 +85,15 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   **effectiveness verification**.
 - **NCR** — non-conformance reports: disposition (use-as-is / rework / reject / return / scrap),
   severity, status; **promote an NCR to a linked CAPA** in one click.
+- **Checklists** — standalone daily/periodic checklists (Pre-Operational Hygiene **F-012-G**, GMP
+  **F-013B**, and any others). Each submission is a dated record with **two-person sign-off**
+  (Completed by → **Verified by** a different Supervisor+). Items are **admin-editable** in
+  Settings → Checklist forms. Print a completed checklist as its SQF record.
 - **Equipment** — equipment & calibration register (machines, anilox, gauges, verifiers, scales):
-  calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired), calibration
-  history, "Record calibration".
+  calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired). "Record
+  calibration" captures the **F-009 Calibration Recording Form** — reference-vs-machine-output
+  readings, pass/fail, sticker, next-due, out-of-service. The **calibration history is extractable
+  at any time** (per-item **History** view, `calibration-history.csv`, and an Excel sheet).
 - **SPC** — statistical process control chart for COF or print registration: mean, ±3σ control
   limits, spec limits, **Cp/Cpk** capability, out-of-limit points.
 
@@ -98,7 +104,11 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 
 **Settings**
 - **Team & Access** *(manager+)* — users, roles, and **per-user stage qualifications**.
-- **Audit Trail** *(manager+)* — last 300 actions; **Verify integrity** checks the HMAC chain.
+- **Amendments History** *(manager+)* — the audit trail, now with **field-level before → after** for
+  every change (who / when / which field / old value → new value). Filter by record ID, job, type or
+  date; **export to CSV**; or open one record's history via the **Amendments** button on any job,
+  CAPA, NCR, equipment item or checklist. **Verify integrity** checks the HMAC chain. Records stay
+  editable (nothing hard-locks) — every amendment is captured instead.
 - **Integrations** *(admin)* — read-only **REST API keys**, outbound **webhooks**, metrics info.
 - **Settings** *(manager+)* — tolerances, KPI targets, **competency enforcement** toggle, defect
   list, **backups & storage**, **restore from backup** (admin, JSON storage).
@@ -143,11 +153,13 @@ The database is one JSON document with these collections:
 | `jobs` | jobNo, machine, customer, product, created, `stage1..4`, `statusOverride` |
 | `capas` | id, jobNo, title, severity, status, root cause, actions, owner, dueDate, effectiveness, escalation |
 | `ncrs` | id, jobNo, description, disposition, severity, status, `capaId` link |
-| `equipment` | id, name, type, machine, calibratedOn, intervalDays, history[] (status computed) |
+| `equipment` | id, name, type, model, serial, machine, calibratedOn, intervalDays, nextDueOverride, `history[]` = {on, technician, result, readings[], sticker, nextDue, outOfService, comments} (status computed) |
+| `checklistDefs` | id, code, title, frequency, responseType, `items[]` {key,label}, requireVerify (admin-editable form templates) |
+| `checklists` | id, defKey, code, date, shift, `responses[]` {itemKey,status,correctiveAction}, completedBy, **verifiedBy/verifiedAt**, status (Draft/Completed/Verified) |
 | `apikeys` | id, name, prefix, **keyHash** (sha256), scopes, active |
 | `webhooks` | id, url, events[], secret, lastStatus |
 | `masterdata` | machines, defectTypes, products, tolerances, KPI targets, competencyEnforced |
-| `audit` | ts, user, action, jobNo, detail, **hash** (HMAC chain) + `auditAnchor` |
+| `audit` | ts, user, action, recordType, recordId, jobNo, detail, **`changes[]` {field,from,to}**, `v`, **hash** (HMAC chain) + `auditAnchor` |
 
 Photos and signatures are stored as files under `data/uploads/`.
 
@@ -231,9 +243,12 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update | view: authed · write: Supervisor |
 | `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote | view: authed · write: Supervisor |
 | `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate | view: authed · write: Supervisor |
+| `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract | authed |
+| `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
+| `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) | authed · verify: Supervisor |
 | `GET /api/analytics` · `GET /api/spc` · `GET /api/suppliers` | Analytics / SPC / suppliers | authed |
 | `GET /api/exec` | Executive RAG summary | Supervisor |
-| `GET /api/audit` · `GET /api/audit/verify` | Audit log · integrity check | authed · Supervisor |
+| `GET /api/audit[?recordId=&jobNo=&recordType=&from=&to=]` · `GET /api/audit/export.csv` · `GET /api/audit/verify` | Amendments History (field-level) · CSV export · integrity check | Supervisor |
 | `GET /api/masterdata` · `PUT /api/masterdata` | Master data | view: authed · write: Supervisor |
 | `GET/POST/PUT/DELETE /api/admin/users[/:id]` | User management | GET: Supervisor · write: QM |
 | `GET /api/admin/backups` · `POST /api/admin/restore` | Backups · restore | Supervisor · Administrator |
