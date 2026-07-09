@@ -38,15 +38,16 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
                      │
                      ▼
         Storage (one JSON document):
-            JSON file (default)  |  SQLite  |  PostgreSQL
+            PostgreSQL (DATABASE_URL, production)  |  JSON file (dev / single-box)
 ```
 
 - **Front-end:** a single-page app (`public/app.js`, `index.html`, `styles.css`) — no framework,
   no build step. Chart.js is loaded from a CDN for analytics (cached for offline).
 - **Back-end:** one Node.js file (`server.js`) serving a JSON REST API and the static PWA.
 - **Storage abstraction** (`integrations/storage.js`) stores the **entire database as a single
-  JSON document**, so the data model is identical across the JSON-file, SQLite and PostgreSQL
-  drivers. Single-writer (one app container).
+  JSON document**, so the data model is identical across the PostgreSQL and JSON-file drivers.
+  Production uses **PostgreSQL** (`DATABASE_URL`); with no `DATABASE_URL` it uses a local
+  `data/db.json` file with crash-safe atomic writes. Single-writer (one app container).
 - **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (SMTP), `notify.js`
   (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events), `avtImport.js`.
 
@@ -156,7 +157,7 @@ Photos and signatures are stored as files under `data/uploads/`.
 | `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS) |
 | `notify.teamsWebhookUrl` | Microsoft Teams Incoming Webhook for alerts/digest |
 | `tolerances` | COF min/max, registration max (mm), barcode min grade — drive auto pass/fail and SPC limits |
-| `storage` | `driver:"json"` (default) or `"sqlite"` (Node 22.5+) |
+| `storage` | Ignored when `DATABASE_URL` is set (production uses PostgreSQL); otherwise a local `data/db.json` file |
 | `backup` | Rotating snapshots of `data/db.json`: `intervalMin`, `keep` |
 | `security` | Login throttle: `maxLoginFails`, `windowMin`, `lockMin` |
 | `reports` | Scheduled digest: `schedule` (off/daily/weekly/monthly), `hour`, `dayOfWeek`, `dayOfMonth` |

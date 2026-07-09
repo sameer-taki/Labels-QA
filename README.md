@@ -4,7 +4,9 @@ A tablet-first quality-inspection app for the Starkist paper-label line. Operato
 Officers capture each of the four production stages on a tablet; every record is keyed to one
 **Job #**, and typing a Job # returns the full cross-stage quality record.
 
-Built to run on an **on-premise server** with **zero external dependencies** (Node.js only).
+Runs as a single Node.js process. The standard (containerised) deployment stores everything in
+**PostgreSQL** (provisioned as part of the stack); for local/dev use it falls back to a
+zero-dependency **JSON file** — no separate database needed to try it out.
 
 ---
 
@@ -65,7 +67,7 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 | `port` / `host` | Server address (default 3000 on all interfaces) |
 | `sso` | Microsoft 365 sign-in. Leave `tenantId`/`clientId` blank for the demo e-mail sign-in; fill both with your **Entra App registration** GUIDs to require real Microsoft Entra ID `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
 | `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
-| `storage` | `driver:"json"` (default, `data/db.json`) or `"sqlite"` (built-in `node:sqlite`, Node 22.5+; falls back to JSON if unavailable) |
+| `storage` | Ignored when `DATABASE_URL` is set — the containerised deploy always uses **PostgreSQL**. Without `DATABASE_URL` the app uses a local `data/db.json` file (dev / single-box on-prem). |
 | `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
 | `tolerances` | COF range, registration max, barcode min grade — drive the auto pass/fail flags (also editable in Admin) |
@@ -83,12 +85,15 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 
 ## 6. Data, backup & database
 
-- All data lives in `data/db.json`; uploaded photos/signatures in `data/uploads/`.
-- **Back up the `data/` folder** on a schedule (it is the system of record).
-- The storage layer is deliberately simple and **swappable**. For higher volume/concurrency,
-  replace the `loadDB`/`saveDB` functions with **PostgreSQL** (recommended) or **SQLite**
-  (`node:sqlite`). The data shapes already map cleanly to tables: `jobs`, `stage1..4`, `users`,
-  `audit`, `masterdata`.
+- **Production (containerised):** all data lives in **PostgreSQL** (the `db` service in the compose
+  files, connected via `DATABASE_URL`). It is the system of record; back it up with the bundled
+  nightly `db-backup` service (pg dumps into the `goldenqa_backups` volume). Uploaded
+  photos/signatures live on the `goldenqa_uploads` volume (`data/uploads/`) — back that up too.
+- **Local / single-box dev:** with no `DATABASE_URL`, the app uses a `data/db.json` file with
+  crash-safe atomic writes (temp-file + fsync + rename, plus a `.bak` fallback) and rotating
+  snapshots into `data/backups/`. Back up the `data/` folder on a schedule.
+- The storage layer is a single JSON document either way, so the two backends are interchangeable
+  (`integrations/storage.js`). SQLite is not supported.
 
 ---
 
@@ -100,7 +105,7 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
       and PWA install work reliably and credentials are encrypted.
 - [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
 - [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart — see [DEPLOYMENT.md](DEPLOYMENT.md) and [`deploy/install-windows-service.ps1`](deploy/install-windows-service.ps1).
-- [x] **Automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Optional **SQLite** storage via `storage.driver` (Node 22.5+). Still back up `data/uploads/`; move to **PostgreSQL** for high concurrency.
+- [x] **PostgreSQL** is the production system of record (`DATABASE_URL`), with the bundled nightly `db-backup` service. On a single-box JSON deploy, **automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Always back up `data/uploads/` as well.
 - [ ] Set the **SQF document-retention** period and confirm with your auditor.
 
 ---
@@ -121,7 +126,7 @@ scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **tam
 brute-force lockout** · **stage-in-sequence enforcement** · **required-field validation** ·
 **dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +
 **scheduled reports** · read-only **REST API keys** · outbound **webhooks** · Prometheus
-**/metrics** · **automatic rotating backups** + admin **restore** · optional **SQLite** storage ·
+**/metrics** · **automatic rotating backups** + admin **restore** · **PostgreSQL** storage ·
 real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
 **deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 

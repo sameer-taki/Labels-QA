@@ -118,7 +118,7 @@ async function main() {
     // 2. login admin / admin123
     r = await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
     eq('login admin/admin123 returns 200', r.status, 200);
-    const adminToken = r.body && r.body.token;
+    let adminToken = r.body && r.body.token;
     ok('login admin returns token', !!adminToken, JSON.stringify(r.body));
 
     // 3. login wrong password -> 401
@@ -256,6 +256,8 @@ async function main() {
     eq('change password too short -> 400', r.status, 400);
     r = await request('POST', '/api/me/password', { current: 'admin123', new: 'newpass123' }, adminToken);
     eq('change password -> 200', r.status, 200);
+    ok('change password returns a fresh token', !!(r.body && r.body.token), JSON.stringify(r.body));
+    adminToken = (r.body && r.body.token) || adminToken; // password change rotates the token (old ones are invalidated)
     r = await request('POST', '/api/login', { username: 'admin', password: 'newpass123' });
     eq('login with new password -> 200', r.status, 200);
 
@@ -357,7 +359,9 @@ async function main() {
     eq('non-admin POST /api/admin/apikeys -> 403', r.status, 403);
 
     // 23. webhooks
-    r = await request('POST', '/api/admin/webhooks', { url: 'http://127.0.0.1:9/none', events: ['job.released'] }, adminToken);
+    // 192.0.2.x is TEST-NET-1 (RFC 5737): reserved/unroutable, so the fire-and-forget delivery goes
+    // nowhere, while still passing the SSRF guard (which blocks loopback/link-local, not TEST-NET).
+    r = await request('POST', '/api/admin/webhooks', { url: 'http://192.0.2.1/none', events: ['job.released'] }, adminToken);
     eq('POST /api/admin/webhooks -> 200', r.status, 200);
     const hookId = r.body && r.body.id;
     r = await request('POST', '/api/admin/webhooks', { url: 'not-a-url' }, adminToken);

@@ -31,8 +31,7 @@
   },
   "storage": {
     "driver": "json",
-    "path": "data/db.sqlite",
-    "note": "driver 'json' (default) writes data/db.json. Set 'sqlite' to use the built-in node:sqlite store at storage.path (requires Node 22.5+; falls back to JSON automatically if unavailable)."
+    "note": "PRODUCTION uses PostgreSQL via the DATABASE_URL env var (set by docker-compose); this block is ignored whenever DATABASE_URL is present. Without DATABASE_URL the app uses a local data/db.json file (dev / on-prem only). SQLite is not supported."
   },
   "backup": {
     "intervalMin": 180,

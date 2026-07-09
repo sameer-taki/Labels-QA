@@ -105,18 +105,24 @@ window.addEventListener("offline", setNet);
 function queueGet(){ try{ return JSON.parse(localStorage.getItem("gqa_queue")||"[]"); }catch(e){ return []; } }
 function queueSet(q){ localStorage.setItem("gqa_queue", JSON.stringify(q)); updateQueueBadge(); }
 function updateQueueBadge(){ const b=$("#qbadge"); if(!b)return; const n=queueGet().length; if(n>0){ b.textContent="⤿ "+n+" to sync"; b.classList.remove("hidden"); } else { b.classList.add("hidden"); } }
+/* Keep the single-job GET cache in step with a local edit so an offline re-render shows what was
+   just entered instead of the last-synced (stale) copy. Mirrors the cache key used in api(). */
+function updateJobCache(job){ if(!job||!job.jobNo) return; try{ localStorage.setItem("gqa_cache_/api/jobs/"+encodeURIComponent(job.jobNo), JSON.stringify(job)); }catch(e){} }
 async function flushQueue(){
-  let q=queueGet(); if(!q.length) return; const keep=[]; let synced=0, rejected=0;
+  const q=queueGet(); if(!q.length) return; const doneIds=new Set(); let synced=0, rejected=0;
   for(const item of q){
     try{
       const r=await fetch(item.path,{method:item.method,headers:hdrs(),body:JSON.stringify(item.body)});
-      if(r.ok){ synced++; }
-      else if(r.status>=400 && r.status<500 && r.status!==401){ rejected++; const j=await r.json().catch(()=>({})); toast("A queued change was rejected: "+(j.error||("HTTP "+r.status))); } // client error won't succeed on retry — drop it
-      else { keep.push(item); } // 401 / 5xx / network — keep and retry later
-    }catch(e){ keep.push(item); }
+      if(r.ok){ synced++; doneIds.add(item.id); }
+      else if(r.status>=400 && r.status<500 && r.status!==401){ rejected++; doneIds.add(item.id); const j=await r.json().catch(()=>({})); toast("A queued change was rejected: "+(j.error||("HTTP "+r.status))); } // client error won't succeed on retry — drop it
+      // 401 / 5xx / network — leave it queued and retry later
+    }catch(e){ /* network — leave queued */ }
   }
-  queueSet(keep);
-  if(synced && !rejected && !keep.length) toast("Offline changes synced.");
+  // Re-read the queue and drop ONLY the items we handled, so any write enqueued DURING this flush
+  // is preserved rather than clobbered by a stale snapshot.
+  queueSet(queueGet().filter(it=> !doneIds.has(it.id)));
+  const remaining=queueGet().length;
+  if(synced && !rejected && !remaining) toast("Offline changes synced.");
   else if(synced) toast(synced+" offline change(s) synced.");
   if((synced||rejected) && CUR.view) render();
 }
@@ -132,7 +138,9 @@ async function api(path, opts={}){
     return j;
   }catch(e){
     if(method==="GET"){ const c=localStorage.getItem("gqa_cache_"+path); if(c){ toast("Offline - showing cached data"); return JSON.parse(c); } }
-    if(method!=="GET" && opts.queueable){ const q=queueGet(); q.push({path,method,body:opts.body}); queueSet(q); toast("Offline - change queued for sync"); return opts.optimistic||{queued:true}; }
+    if(method!=="GET" && opts.queueable){ const q=queueGet(); const item={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,8), path, method, body:opts.body };
+      const i=q.findIndex(it=>it.path===path && it.method===method); // coalesce repeated saves of the same target — the latest full snapshot wins
+      if(i>=0) q[i]=item; else q.push(item); queueSet(q); toast("Offline - change queued for sync"); return opts.optimistic||{queued:true}; }
     throw e;
   }
 }
@@ -494,7 +502,14 @@ async function saveStage(stage,done){ let data=collectStageData(stage); data._do
     const miss=validateStageData(stage,data);
     if(miss.length){ toast("Can't complete — missing: "+miss.join(", ")); return; }
   }
-  try{ await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/stage/"+stage.slice(-1),{method:"PUT",body:{data},queueable:true,optimistic:{}}); toast(done?"Stage complete":"Draft saved"); go("entry",{jobNo:JOB.jobNo,stage}); }
+  try{
+    await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/stage/"+stage.slice(-1),{method:"PUT",body:{data},queueable:true,optimistic:{}});
+    // Reflect the saved stage locally and in the GET cache, so the re-render below shows the
+    // entered data even when offline (where the reload falls back to that cache) — otherwise the
+    // form would blank out and a re-entry could overwrite this save on sync.
+    if(JOB){ JOB[stage]=data; updateJobCache(JOB); }
+    toast(done?"Stage complete":"Draft saved"); go("entry",{jobNo:JOB.jobNo,stage});
+  }
   catch(e){ toast(e.message); }
 }
 
@@ -974,23 +989,24 @@ async function changePassword(){ const cur=val("pw_cur"), nw=val("pw_new"), cf=v
   if(!cur||!nw){ toast("Enter your current and new password"); return; }
   if(nw.length<6){ toast("New password must be at least 6 characters"); return; }
   if(nw!==cf){ toast("New passwords don't match"); return; }
-  try{ await api("/api/me/password",{method:"POST",body:{current:cur,new:nw}}); toast("Password updated"); ["pw_cur","pw_new","pw_cf"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); }catch(e){ toast(e.message); }
+  try{ const r=await api("/api/me/password",{method:"POST",body:{current:cur,new:nw}}); if(r&&r.token){ TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); } toast("Password updated"); ["pw_cur","pw_new","pw_cf"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); }catch(e){ toast(e.message); }
 }
 function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
     <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
+    <div class="field"><label>E-mail (for Microsoft 365 sign-in)</label><input id="u_email" type="email" autocapitalize="none" value="${u?esc(u.email||''):''}" placeholder="e.g. jsmith@golden.com.fj"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
     <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${[1,2,3,4].map(s=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${s}" ${u&&(u.qualifiedStages||[]).map(Number).includes(s)?'checked':''} style="width:auto;min-height:0;margin-right:6px">Stage ${s}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
     <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>
     <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
-async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass");
+async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass"), email=val("u_email").trim();
   if(!name){ toast("Name is required"); return; }
   const qualifiedStages=[...document.querySelectorAll('.u_qs:checked')].map(c=>Number(c.value));
   try{
-    if(id){ const body={name,role,qualifiedStages}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
-    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password,qualifiedStages}}); }
+    if(id){ const body={name,role,email,qualifiedStages}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
+    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,email,password,qualifiedStages}}); }
     closeModal(); toast("User saved"); team();
   }catch(e){ toast(e.message); }
 }

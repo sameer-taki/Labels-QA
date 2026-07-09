@@ -314,8 +314,9 @@ Register-ScheduledTask -TaskName "GoldenQA-Backup" -Action $a -Trigger $t -RunLe
 **Restore:** stop the service, copy the chosen snapshot's `db.json` and `uploads/`
 back over `data/`, then start the service.
 
-> Migrating to PostgreSQL/SQLite later (README §6) replaces this file backup with
-> normal database backups; `uploads/` still needs backing up either way.
+> The containerised deploy uses PostgreSQL (README §6), which replaces this file backup with
+> normal database backups (the bundled nightly `db-backup` service); `uploads/` still needs
+> backing up either way.
 
 ---
 
