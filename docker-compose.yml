@@ -18,6 +18,9 @@ services:
       context: .
       dockerfile: Dockerfile
     image: goldenqa:latest
+    # Built from source here, not pulled from a registry — always (re)build, never `docker pull`
+    # (which would fail with "pull access denied"). Also disable "Re-pull image" on the stack.
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       db:
