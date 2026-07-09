@@ -38,15 +38,16 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
                      │
                      ▼
         Storage (one JSON document):
-            JSON file (default)  |  SQLite  |  PostgreSQL
+            PostgreSQL (DATABASE_URL, production)  |  JSON file (dev / single-box)
 ```
 
 - **Front-end:** a single-page app (`public/app.js`, `index.html`, `styles.css`) — no framework,
   no build step. Chart.js is loaded from a CDN for analytics (cached for offline).
 - **Back-end:** one Node.js file (`server.js`) serving a JSON REST API and the static PWA.
 - **Storage abstraction** (`integrations/storage.js`) stores the **entire database as a single
-  JSON document**, so the data model is identical across the JSON-file, SQLite and PostgreSQL
-  drivers. Single-writer (one app container).
+  JSON document**, so the data model is identical across the PostgreSQL and JSON-file drivers.
+  Production uses **PostgreSQL** (`DATABASE_URL`); with no `DATABASE_URL` it uses a local
+  `data/db.json` file with crash-safe atomic writes. Single-writer (one app container).
 - **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (SMTP), `notify.js`
   (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events), `avtImport.js`.
 
@@ -84,9 +85,16 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   **effectiveness verification**.
 - **NCR** — non-conformance reports: disposition (use-as-is / rework / reject / return / scrap),
   severity, status; **promote an NCR to a linked CAPA** in one click.
+- **Checklists** — standalone daily/periodic checklists (Pre-Operational Hygiene **F-012-G** daily;
+  GMP **F-013B** monthly, 6 sections / 59 items; and any others). Each submission is a dated record
+  with **two-person sign-off** (Completed by → **Verified by** a different Supervisor+). Items and
+  sections are **admin-editable** in Settings → Checklist forms (a `## Section` line starts a
+  section). Print a completed checklist as its SQF record.
 - **Equipment** — equipment & calibration register (machines, anilox, gauges, verifiers, scales):
-  calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired), calibration
-  history, "Record calibration".
+  calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired). "Record
+  calibration" captures the **F-009 Calibration Recording Form** — reference-vs-machine-output
+  readings, pass/fail, sticker, next-due, out-of-service. The **calibration history is extractable
+  at any time** (per-item **History** view, `calibration-history.csv`, and an Excel sheet).
 - **SPC** — statistical process control chart for COF or print registration: mean, ±3σ control
   limits, spec limits, **Cp/Cpk** capability, out-of-limit points.
 
@@ -97,7 +105,11 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 
 **Settings**
 - **Team & Access** *(manager+)* — users, roles, and **per-user stage qualifications**.
-- **Audit Trail** *(manager+)* — last 300 actions; **Verify integrity** checks the HMAC chain.
+- **Amendments History** *(manager+)* — the audit trail, now with **field-level before → after** for
+  every change (who / when / which field / old value → new value). Filter by record ID, job, type or
+  date; **export to CSV**; or open one record's history via the **Amendments** button on any job,
+  CAPA, NCR, equipment item or checklist. **Verify integrity** checks the HMAC chain. Records stay
+  editable (nothing hard-locks) — every amendment is captured instead.
 - **Integrations** *(admin)* — read-only **REST API keys**, outbound **webhooks**, metrics info.
 - **Settings** *(manager+)* — tolerances, KPI targets, **competency enforcement** toggle, defect
   list, **backups & storage**, **restore from backup** (admin, JSON storage).
@@ -124,9 +136,13 @@ Four roles, increasing privilege: **QA Officer → Supervisor → Quality Manage
 > **Competency gating** (opt-in, Settings): when on, a stage sign-off is blocked unless the signer
 > has that stage in their **qualified stages** (set per user in Team & Access). Administrators bypass.
 
-**Sign-in:** username + password (salted **scrypt**), or **Microsoft 365 / Entra ID** SSO. With SSO
-unconfigured, the "Sign in with Microsoft 365" button runs a demo e-mail sign-in; unknown users get
-least-privilege **QA Officer**.
+**Sign-in:** local **Active Directory** (LDAPS) is the recommended production method — users enter
+their AD username + password, verified against a domain controller, and their **AD security groups**
+map to app roles (`ldap.roleGroups`; highest role wins, no matching group = denied). AD users are
+provisioned/refreshed automatically on each login and have no local password. Local accounts
+(salted **scrypt**) remain for a break-glass admin and are checked first, so an admin can always sign
+in even if the DC is down. Cloud **Microsoft Entra ID** SSO is also available but off by default.
+See `deploy/AD-SSO-SETUP.md`.
 
 ## 6. Data model
 
@@ -138,11 +154,13 @@ The database is one JSON document with these collections:
 | `jobs` | jobNo, machine, customer, product, created, `stage1..4`, `statusOverride` |
 | `capas` | id, jobNo, title, severity, status, root cause, actions, owner, dueDate, effectiveness, escalation |
 | `ncrs` | id, jobNo, description, disposition, severity, status, `capaId` link |
-| `equipment` | id, name, type, machine, calibratedOn, intervalDays, history[] (status computed) |
+| `equipment` | id, name, type, model, serial, machine, calibratedOn, intervalDays, nextDueOverride, `history[]` = {on, technician, result, readings[], sticker, nextDue, outOfService, comments} (status computed) |
+| `checklistDefs` | id, code, title, frequency, responseType, `items[]` {key,label}, requireVerify (admin-editable form templates) |
+| `checklists` | id, defKey, code, date, shift, `responses[]` {itemKey,status,correctiveAction}, completedBy, **verifiedBy/verifiedAt**, status (Draft/Completed/Verified) |
 | `apikeys` | id, name, prefix, **keyHash** (sha256), scopes, active |
 | `webhooks` | id, url, events[], secret, lastStatus |
 | `masterdata` | machines, defectTypes, products, tolerances, KPI targets, competencyEnforced |
-| `audit` | ts, user, action, jobNo, detail, **hash** (HMAC chain) + `auditAnchor` |
+| `audit` | ts, user, action, recordType, recordId, jobNo, detail, **`changes[]` {field,from,to}**, `v`, **hash** (HMAC chain) + `auditAnchor` |
 
 Photos and signatures are stored as files under `data/uploads/`.
 
@@ -152,11 +170,12 @@ Photos and signatures are stored as files under `data/uploads/`.
 |---|---|
 | `port` / `host` | Server address (default `3000` on all interfaces) |
 | `orgName` | Organisation name shown in the UI and reports |
-| `sso` | Microsoft 365 sign-in. Blank `tenantId`/`clientId` = demo e-mail sign-in; fill both to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
+| `ldap` | Local Active Directory (LDAPS) sign-in — `enabled` + `LDAP_*` env + `roleGroups` group→role map (`deploy/AD-SSO-SETUP.md`) |
+| `sso` | Cloud Microsoft Entra ID sign-in (off by default). Fill `tenantId`/`clientId` to require real Entra ID `id_token` validation (`deploy/ENTRA-SSO-SETUP.md`) |
 | `notify.email` | SMTP for hold/reject alerts + digests (`secure:true`=465 implicit TLS, `false`=587 STARTTLS) |
 | `notify.teamsWebhookUrl` | Microsoft Teams Incoming Webhook for alerts/digest |
 | `tolerances` | COF min/max, registration max (mm), barcode min grade — drive auto pass/fail and SPC limits |
-| `storage` | `driver:"json"` (default) or `"sqlite"` (Node 22.5+) |
+| `storage` | Ignored when `DATABASE_URL` is set (production uses PostgreSQL); otherwise a local `data/db.json` file |
 | `backup` | Rotating snapshots of `data/db.json`: `intervalMin`, `keep` |
 | `security` | Login throttle: `maxLoginFails`, `windowMin`, `lockMin` |
 | `reports` | Scheduled digest: `schedule` (off/daily/weekly/monthly), `hour`, `dayOfWeek`, `dayOfMonth` |
@@ -225,9 +244,12 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET/POST/PUT /api/capas[/:id]` | CAPA list/create/update | view: authed · write: Supervisor |
 | `GET/POST/PUT /api/ncrs[/:id]` · `POST /api/ncrs/:id/capa` | NCR + promote | view: authed · write: Supervisor |
 | `GET/POST/PUT /api/equipment[/:id]` · `POST /api/equipment/:id/calibrate` | Equipment + calibrate | view: authed · write: Supervisor |
+| `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract | authed |
+| `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
+| `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) | authed · verify: Supervisor |
 | `GET /api/analytics` · `GET /api/spc` · `GET /api/suppliers` | Analytics / SPC / suppliers | authed |
 | `GET /api/exec` | Executive RAG summary | Supervisor |
-| `GET /api/audit` · `GET /api/audit/verify` | Audit log · integrity check | authed · Supervisor |
+| `GET /api/audit[?recordId=&jobNo=&recordType=&from=&to=]` · `GET /api/audit/export.csv` · `GET /api/audit/verify` | Amendments History (field-level) · CSV export · integrity check | Supervisor |
 | `GET /api/masterdata` · `PUT /api/masterdata` | Master data | view: authed · write: Supervisor |
 | `GET/POST/PUT/DELETE /api/admin/users[/:id]` | User management | GET: Supervisor · write: QM |
 | `GET /api/admin/backups` · `POST /api/admin/restore` | Backups · restore | Supervisor · Administrator |

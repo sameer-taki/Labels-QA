@@ -3,8 +3,18 @@
   "version": "1.0.0",
   "description": "Golden Manufacturers - Starkist Label QA in-process inspection system (tablet-first, on-prem).",
   "main": "server.js",
-  "scripts": { "start": "node server.js", "test": "node test/smoke.js" },
-  "engines": { "node": ">=18" },
-  "dependencies": { "pg": "^8.13.1" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js && node test/ad-smoke.js",
+    "test:api": "node test/smoke.js",
+    "test:ad": "node test/ad-smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ldapjs": "^3.0.7",
+    "pg": "^8.13.1"
+  },
   "private": true
 }

@@ -118,7 +118,7 @@ async function main() {
     // 2. login admin / admin123
     r = await request('POST', '/api/login', { username: 'admin', password: 'admin123' });
     eq('login admin/admin123 returns 200', r.status, 200);
-    const adminToken = r.body && r.body.token;
+    let adminToken = r.body && r.body.token;
     ok('login admin returns token', !!adminToken, JSON.stringify(r.body));
 
     // 3. login wrong password -> 401
@@ -256,6 +256,8 @@ async function main() {
     eq('change password too short -> 400', r.status, 400);
     r = await request('POST', '/api/me/password', { current: 'admin123', new: 'newpass123' }, adminToken);
     eq('change password -> 200', r.status, 200);
+    ok('change password returns a fresh token', !!(r.body && r.body.token), JSON.stringify(r.body));
+    adminToken = (r.body && r.body.token) || adminToken; // password change rotates the token (old ones are invalidated)
     r = await request('POST', '/api/login', { username: 'admin', password: 'newpass123' });
     eq('login with new password -> 200', r.status, 200);
 
@@ -357,7 +359,9 @@ async function main() {
     eq('non-admin POST /api/admin/apikeys -> 403', r.status, 403);
 
     // 23. webhooks
-    r = await request('POST', '/api/admin/webhooks', { url: 'http://127.0.0.1:9/none', events: ['job.released'] }, adminToken);
+    // 192.0.2.x is TEST-NET-1 (RFC 5737): reserved/unroutable, so the fire-and-forget delivery goes
+    // nowhere, while still passing the SSRF guard (which blocks loopback/link-local, not TEST-NET).
+    r = await request('POST', '/api/admin/webhooks', { url: 'http://192.0.2.1/none', events: ['job.released'] }, adminToken);
     eq('POST /api/admin/webhooks -> 200', r.status, 200);
     const hookId = r.body && r.body.id;
     r = await request('POST', '/api/admin/webhooks', { url: 'not-a-url' }, adminToken);
@@ -433,6 +437,63 @@ async function main() {
     ok('workbook is SpreadsheetML with Jobs + CAPAs sheets',
       typeof r.raw === 'string' && r.raw.indexOf('<Workbook') >= 0 && r.raw.indexOf('ss:Name="Jobs"') >= 0 && r.raw.indexOf('ss:Name="CAPAs"') >= 0,
       (r.raw || '').slice(0, 60));
+    ok('workbook now includes Calibration History + Checklists sheets',
+      typeof r.raw === 'string' && r.raw.indexOf('ss:Name="Calibration History"') >= 0 && r.raw.indexOf('ss:Name="Checklists"') >= 0, '');
+
+    // 30. Checklists module (F-012 hygiene, two-person sign-off)
+    r = await request('GET', '/api/checklist-defs', undefined, adminToken);
+    eq('GET /api/checklist-defs -> 200', r.status, 200);
+    const hyg = (r.body || []).find(d => d.code === 'F-012-G');
+    ok('F-012-G hygiene checklist seeded with items', !!(hyg && (hyg.items || []).length >= 15), hyg ? ('items=' + (hyg.items || []).length) : 'missing');
+    const gmp = (r.body || []).find(d => d.code === 'F-013B');
+    ok('F-013B GMP checklist populated with sections + items', !!(gmp && (gmp.items || []).filter(i => i.header).length === 6 && (gmp.items || []).filter(i => !i.header).length >= 55),
+      gmp ? ('sections=' + (gmp.items || []).filter(i => i.header).length + ' items=' + (gmp.items || []).filter(i => !i.header).length) : 'missing');
+    const resp = (hyg.items || []).map(it => ({ itemKey: it.key, status: 'Yes' }));
+    r = await request('POST', '/api/checklists', { defKey: hyg.id, date: '2026-07-09', completedByName: 'Admin', responses: resp, status: 'Completed' }, adminToken);
+    eq('POST /api/checklists (completed) -> 200', r.status, 200);
+    const chkId = r.body && r.body.id;
+    ok('checklist created with Completed status', !!(r.body && r.body.status === 'Completed'), (r.body || {}).status);
+    r = await request('POST', '/api/checklists', { defKey: hyg.id, date: '2026-07-09', completedByName: 'Admin', responses: [], status: 'Completed' }, adminToken);
+    eq('complete checklist with unanswered items -> 400', r.status, 400);
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(chkId) + '/verify', {}, adminToken);
+    eq('verify by same user who completed -> 403 (two-person)', r.status, 403);
+    r = await request('POST', '/api/login', { username: 'rprasad', password: 'prasad123' });
+    const supTok = r.body && r.body.token;
+    r = await request('POST', '/api/checklists/' + encodeURIComponent(chkId) + '/verify', {}, supTok);
+    eq('verify by a second manager -> 200', r.status, 200);
+    ok('checklist now Verified with verifier recorded', !!(r.body && r.body.status === 'Verified' && r.body.verifiedBy), (r.body || {}).status);
+    r = await request('POST', '/api/checklist-defs', { code: 'X', title: 'Nope' }, officerToken);
+    eq('create checklist-def by non-manager -> 403', r.status, 403);
+
+    // 31. Calibration recording form + extractable history
+    r = await request('GET', '/api/equipment', undefined, adminToken);
+    const eq0 = (r.body || [])[0];
+    ok('equipment seeded', !!eq0, 'none');
+    r = await request('POST', '/api/equipment/' + encodeURIComponent(eq0.id) + '/calibrate',
+      { on: '2026-07-09', result: 'Pass', technician: 'A. Kumar', sticker: 'Yes', registerUpdated: true, nextDue: '2027-07-09', readings: [{ reference: '10', machineOutput: '10.01' }, { reference: '20', machineOutput: '19.98' }] }, adminToken);
+    eq('record calibration with readings -> 200', r.status, 200);
+    r = await request('GET', '/api/equipment/' + encodeURIComponent(eq0.id) + '/history', undefined, adminToken);
+    eq('GET equipment calibration history -> 200', r.status, 200);
+    ok('history captures the 2 readings', !!(r.body && r.body.history && r.body.history[0] && (r.body.history[0].readings || []).length === 2), JSON.stringify(r.body && r.body.history && r.body.history[0] && r.body.history[0].readings));
+    r = await request('GET', '/api/equipment/calibration-history.csv', undefined, adminToken);
+    eq('calibration-history.csv -> 200', r.status, 200);
+    ok('calibration CSV non-empty with Technician column', typeof r.raw === 'string' && r.raw.indexOf('Technician') >= 0 && r.raw.split('\n').length > 1, (r.raw || '').slice(0, 50));
+
+    // 32. Amendments History (field-level before -> after)
+    r = await request('GET', '/api/capas', undefined, adminToken);
+    const capa0 = (r.body || [])[0];
+    ok('a CAPA exists to amend', !!capa0, 'none');
+    await request('PUT', '/api/capas/' + encodeURIComponent(capa0.id), { owner: 'zzz-newowner', severity: 'High' }, adminToken);
+    r = await request('GET', '/api/audit?recordId=' + encodeURIComponent(capa0.id), undefined, adminToken);
+    const withChg = (r.body || []).find(e => e.changes && e.changes.some(c => c.field === 'owner'));
+    ok('amendment captured owner change (from -> to)', !!(withChg && withChg.changes.some(c => c.field === 'owner' && c.to === 'zzz-newowner')), JSON.stringify(withChg && withChg.changes));
+    r = await request('GET', '/api/audit/export.csv', undefined, adminToken);
+    eq('amendments export.csv -> 200', r.status, 200);
+    ok('amendments CSV has From/To columns', typeof r.raw === 'string' && r.raw.indexOf('From') >= 0 && r.raw.indexOf('To') >= 0, (r.raw || '').slice(0, 80));
+    r = await request('GET', '/api/audit', undefined, officerToken);
+    eq('audit read by non-manager -> 403', r.status, 403);
+    r = await request('GET', '/api/audit/verify', undefined, adminToken);
+    ok('audit chain still intact after v2 (field-level) entries', !!(r.body && r.body.ok === true), JSON.stringify(r.body));
 
   } catch (e) {
     failed++;

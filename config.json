@@ -3,11 +3,29 @@
   "host": "0.0.0.0",
   "orgName": "Golden Manufacturers Pte Ltd",
   "sso": {
-    "enabled": true,
+    "enabled": false,
     "tenantId": "",
     "clientId": "",
     "allowedDomain": "golden.com.fj",
-    "note": "Leave tenantId/clientId blank for the demo e-mail sign-in. Fill BOTH with your Entra App registration GUIDs to require real Microsoft Entra ID id_token validation (see deploy/ENTRA-SSO-SETUP.md)."
+    "note": "CLOUD Microsoft Entra ID sign-in (needs internet). Disabled by default in favour of local Active Directory (see the ldap block). To use Entra instead, set enabled:true and fill tenantId/clientId with your Entra App registration GUIDs (deploy/ENTRA-SSO-SETUP.md)."
+  },
+  "ldap": {
+    "enabled": false,
+    "url": "ldaps://dc.golden.local:636",
+    "baseDN": "DC=golden,DC=local",
+    "usernameAttribute": "sAMAccountName",
+    "bindDN": "",
+    "bindPassword": "",
+    "roleGroups": {
+      "Administrator": ["CN=GoldenQA-Admins,OU=Groups,DC=golden,DC=local"],
+      "Quality Manager": ["CN=GoldenQA-Managers,OU=Groups,DC=golden,DC=local"],
+      "Supervisor": ["CN=GoldenQA-Supervisors,OU=Groups,DC=golden,DC=local"],
+      "QA Officer": ["CN=GoldenQA-Officers,OU=Groups,DC=golden,DC=local"]
+    },
+    "stageGroups": {},
+    "defaultRole": "",
+    "tls": { "rejectUnauthorized": true, "caFile": "" },
+    "note": "Local Active Directory sign-in over LDAPS. Set enabled:true and point url at a domain controller. Secrets come from env: LDAP_BIND_DN + LDAP_BIND_PASSWORD (a read-only service account used to look up users); url/baseDN can also be overridden via LDAP_URL / LDAP_BASE_DN / LDAP_ENABLED. roleGroups maps AD security groups (full DN or bare CN) to app roles — a user with no matching group is denied unless defaultRole is set. stageGroups optionally maps groups to stage competencies (1-4); empty = all stages. See deploy/AD-SSO-SETUP.md."
   },
   "notify": {
     "teamsWebhookUrl": "",
@@ -31,8 +49,7 @@
   },
   "storage": {
     "driver": "json",
-    "path": "data/db.sqlite",
-    "note": "driver 'json' (default) writes data/db.json. Set 'sqlite' to use the built-in node:sqlite store at storage.path (requires Node 22.5+; falls back to JSON automatically if unavailable)."
+    "note": "PRODUCTION uses PostgreSQL via the DATABASE_URL env var (set by docker-compose); this block is ignored whenever DATABASE_URL is present. Without DATABASE_URL the app uses a local data/db.json file (dev / on-prem only). SQLite is not supported."
   },
   "backup": {
     "intervalMin": 180,

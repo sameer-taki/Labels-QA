@@ -4,7 +4,9 @@ A tablet-first quality-inspection app for the Starkist paper-label line. Operato
 Officers capture each of the four production stages on a tablet; every record is keyed to one
 **Job #**, and typing a Job # returns the full cross-stage quality record.
 
-Built to run on an **on-premise server** with **zero external dependencies** (Node.js only).
+Runs as a single Node.js process. The standard (containerised) deployment stores everything in
+**PostgreSQL** (provisioned as part of the stack); for local/dev use it falls back to a
+zero-dependency **JSON file** — no separate database needed to try it out.
 
 ---
 
@@ -35,7 +37,7 @@ Linux: `systemd` or `pm2`). See section 7.
 | `akumar` | A. Kumar | QA Officer | `kumar123` |
 | `pdevi` | P. Devi | QA Officer | `devi123` |
 
-Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**, or sign in with **Microsoft 365** (Entra ID) instead.
+Passwords are salted and hashed with **scrypt**. Change them in **Admin → Users**. For production, wire the app to your **local Active Directory** so staff sign in with their domain accounts (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)); the seeded admin above stays as a local break-glass account.
 
 ---
 
@@ -56,6 +58,24 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 3. **Sheeting / Slitting** — PRD002
 4. **Finishing & Release** — F-038-A (mandatory hourly checks, final release decision)
 
+### Other digitised forms (not tied to a Job #)
+
+- **F-009 Calibration Recording Form** — recorded against each item in the **Equipment & Calibration**
+  register: reference-vs-machine-output readings, pass/fail, sticker, next-due and out-of-service.
+  The full **calibration history is extractable at any time** (per-item view, CSV, and an Excel sheet).
+- **F-012-G Pre-Operational Hygiene Checklist** (daily, 17 items) and **F-013B GMP Checklist**
+  (monthly, 6 sections / 59 items) — standalone **Checklists** with two-person sign-off (Completed by
+  → Verified by). Both ship fully populated; items and sections are **admin-editable** (Settings →
+  Checklist forms — a `## Section` line starts a new section).
+
+### Amendments History
+
+Every entry and change is recorded in a tamper-evident (HMAC-chained) **Amendments History** — who,
+when, and the **field-level before → value → after**. Data stays editable (with a break-glass reality
+for the floor), but nothing changes without a traceable record. Filter by record/job/date and export
+to CSV. Open a single record's history via the **Amendments** button on any job, CAPA, NCR, equipment
+item or checklist.
+
 ---
 
 ## 4. Configuration — `config.json`
@@ -63,9 +83,10 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 | Key | What it does |
 |-----|--------------|
 | `port` / `host` | Server address (default 3000 on all interfaces) |
-| `sso` | Microsoft 365 sign-in. Leave `tenantId`/`clientId` blank for the demo e-mail sign-in; fill both with your **Entra App registration** GUIDs to require real Microsoft Entra ID `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
+| `ldap` | **Local Active Directory** sign-in (LDAPS). Set `ldap.enabled` + the `LDAP_*` env vars and map AD groups to roles in `ldap.roleGroups` (see [deploy/AD-SSO-SETUP.md](deploy/AD-SSO-SETUP.md)). This is the recommended production auth. |
+| `sso` | Cloud **Microsoft Entra ID** sign-in (needs internet), disabled by default. Fill `tenantId`/`clientId` with your Entra App registration GUIDs to require real `id_token` validation (see [deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)) |
 | `notify.email` | SMTP details for hold/reject alerts and the manager digest. `secure:true` = implicit TLS (465); `secure:false` = STARTTLS (587); leave `user`/`pass` blank for an unauthenticated relay |
-| `storage` | `driver:"json"` (default, `data/db.json`) or `"sqlite"` (built-in `node:sqlite`, Node 22.5+; falls back to JSON if unavailable) |
+| `storage` | Ignored when `DATABASE_URL` is set — the containerised deploy always uses **PostgreSQL**. Without `DATABASE_URL` the app uses a local `data/db.json` file (dev / single-box on-prem). |
 | `backup` | Automatic rotating snapshots of `data/db.json` into `data/backups/` — `intervalMin` between snapshots, `keep` = how many to retain |
 | `notify` | Paste a **Teams Incoming Webhook URL** and/or SMTP details to get hold/reject alerts |
 | `tolerances` | COF range, registration max, barcode min grade — drive the auto pass/fail flags (also editable in Admin) |
@@ -83,12 +104,15 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 
 ## 6. Data, backup & database
 
-- All data lives in `data/db.json`; uploaded photos/signatures in `data/uploads/`.
-- **Back up the `data/` folder** on a schedule (it is the system of record).
-- The storage layer is deliberately simple and **swappable**. For higher volume/concurrency,
-  replace the `loadDB`/`saveDB` functions with **PostgreSQL** (recommended) or **SQLite**
-  (`node:sqlite`). The data shapes already map cleanly to tables: `jobs`, `stage1..4`, `users`,
-  `audit`, `masterdata`.
+- **Production (containerised):** all data lives in **PostgreSQL** (the `db` service in the compose
+  files, connected via `DATABASE_URL`). It is the system of record; back it up with the bundled
+  nightly `db-backup` service (pg dumps into the `goldenqa_backups` volume). Uploaded
+  photos/signatures live on the `goldenqa_uploads` volume (`data/uploads/`) — back that up too.
+- **Local / single-box dev:** with no `DATABASE_URL`, the app uses a `data/db.json` file with
+  crash-safe atomic writes (temp-file + fsync + rename, plus a `.bak` fallback) and rotating
+  snapshots into `data/backups/`. Back up the `data/` folder on a schedule.
+- The storage layer is a single JSON document either way, so the two backends are interchangeable
+  (`integrations/storage.js`). SQLite is not supported.
 
 ---
 
@@ -100,14 +124,14 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
       and PWA install work reliably and credentials are encrypted.
 - [x] Real **Microsoft Entra ID** `id_token` validation is built in — set `sso.tenantId`/`sso.clientId` in `config.json` ([deploy/ENTRA-SSO-SETUP.md](deploy/ENTRA-SSO-SETUP.md)). Leave blank for the demo sign-in.
 - [ ] Run as a service (pm2 / systemd / Windows service) with auto-restart — see [DEPLOYMENT.md](DEPLOYMENT.md) and [`deploy/install-windows-service.ps1`](deploy/install-windows-service.ps1).
-- [x] **Automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Optional **SQLite** storage via `storage.driver` (Node 22.5+). Still back up `data/uploads/`; move to **PostgreSQL** for high concurrency.
+- [x] **PostgreSQL** is the production system of record (`DATABASE_URL`), with the bundled nightly `db-backup` service. On a single-box JSON deploy, **automatic rotating backups** of `data/db.json` run on a timer (`config.json` → `backup`). Always back up `data/uploads/` as well.
 - [ ] Set the **SQF document-retention** period and confirm with your auditor.
 
 ---
 
 ## 8. What's included (feature list)
 
-Tablet-first PWA (installable, offline + sync) · username/password + Microsoft 365 sign-in · role-based access ·
+Tablet-first PWA (installable, offline + sync) · local **Active Directory (LDAPS)** sign-in with AD-group→role mapping (+ local/break-glass accounts, optional Entra SSO) · role-based access ·
 machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
@@ -115,14 +139,17 @@ Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · **A
 import · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
 effectiveness check) · **NCR** non-conformance reports (promote to CAPA) · **equipment &
 calibration register** (due/overdue tracking) · **SPC** control charts (Cp/Cpk) · **supplier
-scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **tamper-evident
-(HMAC-chained) audit trail** with one-click integrity check · admin master-data editor ·
+scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **standalone checklists**
+(hygiene / GMP) with admin-editable items and two-person sign-off · **F-009 calibration recording**
+with extractable calibration history (CSV/Excel) · **Amendments History** — tamper-evident
+(HMAC-chained), field-level who/when/before→after, filterable + exportable, per-record drill-down ·
+admin master-data editor ·
 **user management** (add/edit, password reset) · **training/competency gating** · **login
 brute-force lockout** · **stage-in-sequence enforcement** · **required-field validation** ·
 **dashboard search/filter** · **CSV + Excel export** · **manager e-mail/Teams digest** +
 **scheduled reports** · read-only **REST API keys** · outbound **webhooks** · Prometheus
-**/metrics** · **automatic rotating backups** + admin **restore** · optional **SQLite** storage ·
-real **Microsoft Entra ID** SSO · smoke tests (`npm test`) · on-prem
+**/metrics** · **automatic rotating backups** + admin **restore** · **PostgreSQL** storage ·
+local **Active Directory** (LDAPS) SSO · smoke tests (`npm test`) · on-prem
 **deployment kit** ([DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ---

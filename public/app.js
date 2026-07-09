@@ -42,7 +42,7 @@ const NAV = [
     {v:"entry",label:"Data Entry",icon:"edit"},
     {v:"lookup",label:"Job Lookup",icon:"search"}
   ]},
-  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"ncr",label:"NCR",icon:"ncr"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
+  { group:"Quality", items:[ {v:"capa",label:"CAPA",icon:"capa"}, {v:"ncr",label:"NCR",icon:"ncr"}, {v:"checklists",label:"Checklists",icon:"checklist"}, {v:"equip",label:"Equipment",icon:"equip"}, {v:"spc",label:"SPC",icon:"spc"} ]},
   { group:"Reports", items:[ {v:"reports",label:"Reports",icon:"chart"}, {v:"suppliers",label:"Suppliers",icon:"truck"} ]},
   { group:"Settings", items:[
     {v:"templates",label:"Templates",icon:"template",mgr:true},
@@ -70,7 +70,8 @@ const ICONS = {
   spc:"M3 3v18h18M7 15l3-4 3 3 4-6",
   truck:"M1 3h15v13H1zM16 8h4l3 3v5h-7M5.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM18.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z",
   ncr:"M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01",
-  template:"M8 3H5a2 2 0 0 0-2 2v3M3 16v3a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M7 8h10M7 12h10M7 16h6"
+  template:"M8 3H5a2 2 0 0 0-2 2v3M3 16v3a2 2 0 0 0 2 2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M7 8h10M7 12h10M7 16h6",
+  checklist:"M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
 const STAGES = [
@@ -105,18 +106,24 @@ window.addEventListener("offline", setNet);
 function queueGet(){ try{ return JSON.parse(localStorage.getItem("gqa_queue")||"[]"); }catch(e){ return []; } }
 function queueSet(q){ localStorage.setItem("gqa_queue", JSON.stringify(q)); updateQueueBadge(); }
 function updateQueueBadge(){ const b=$("#qbadge"); if(!b)return; const n=queueGet().length; if(n>0){ b.textContent="⤿ "+n+" to sync"; b.classList.remove("hidden"); } else { b.classList.add("hidden"); } }
+/* Keep the single-job GET cache in step with a local edit so an offline re-render shows what was
+   just entered instead of the last-synced (stale) copy. Mirrors the cache key used in api(). */
+function updateJobCache(job){ if(!job||!job.jobNo) return; try{ localStorage.setItem("gqa_cache_/api/jobs/"+encodeURIComponent(job.jobNo), JSON.stringify(job)); }catch(e){} }
 async function flushQueue(){
-  let q=queueGet(); if(!q.length) return; const keep=[]; let synced=0, rejected=0;
+  const q=queueGet(); if(!q.length) return; const doneIds=new Set(); let synced=0, rejected=0;
   for(const item of q){
     try{
       const r=await fetch(item.path,{method:item.method,headers:hdrs(),body:JSON.stringify(item.body)});
-      if(r.ok){ synced++; }
-      else if(r.status>=400 && r.status<500 && r.status!==401){ rejected++; const j=await r.json().catch(()=>({})); toast("A queued change was rejected: "+(j.error||("HTTP "+r.status))); } // client error won't succeed on retry — drop it
-      else { keep.push(item); } // 401 / 5xx / network — keep and retry later
-    }catch(e){ keep.push(item); }
+      if(r.ok){ synced++; doneIds.add(item.id); }
+      else if(r.status>=400 && r.status<500 && r.status!==401){ rejected++; doneIds.add(item.id); const j=await r.json().catch(()=>({})); toast("A queued change was rejected: "+(j.error||("HTTP "+r.status))); } // client error won't succeed on retry — drop it
+      // 401 / 5xx / network — leave it queued and retry later
+    }catch(e){ /* network — leave queued */ }
   }
-  queueSet(keep);
-  if(synced && !rejected && !keep.length) toast("Offline changes synced.");
+  // Re-read the queue and drop ONLY the items we handled, so any write enqueued DURING this flush
+  // is preserved rather than clobbered by a stale snapshot.
+  queueSet(queueGet().filter(it=> !doneIds.has(it.id)));
+  const remaining=queueGet().length;
+  if(synced && !rejected && !remaining) toast("Offline changes synced.");
   else if(synced) toast(synced+" offline change(s) synced.");
   if((synced||rejected) && CUR.view) render();
 }
@@ -132,7 +139,9 @@ async function api(path, opts={}){
     return j;
   }catch(e){
     if(method==="GET"){ const c=localStorage.getItem("gqa_cache_"+path); if(c){ toast("Offline - showing cached data"); return JSON.parse(c); } }
-    if(method!=="GET" && opts.queueable){ const q=queueGet(); q.push({path,method,body:opts.body}); queueSet(q); toast("Offline - change queued for sync"); return opts.optimistic||{queued:true}; }
+    if(method!=="GET" && opts.queueable){ const q=queueGet(); const item={ id:Date.now().toString(36)+Math.random().toString(36).slice(2,8), path, method, body:opts.body };
+      const i=q.findIndex(it=>it.path===path && it.method===method); // coalesce repeated saves of the same target — the latest full snapshot wins
+      if(i>=0) q[i]=item; else q.push(item); queueSet(q); toast("Offline - change queued for sync"); return opts.optimistic||{queued:true}; }
     throw e;
   }
 }
@@ -149,6 +158,9 @@ async function showLogin(){
   if(u) u.value=""; if(p) p.value="";
   $("#pwLogin").onclick=doLogin;
   $("#ssoLogin").onclick=doSso;
+  // Cloud Microsoft 365 button is shown only when Entra SSO is enabled. With local Active Directory
+  // (or plain local accounts) users sign in with the username/password form above.
+  try{ const cfg=await (await fetch("/api/config")).json(); const on=!!(cfg&&cfg.sso&&cfg.sso.enabled); const b=$("#ssoLogin"); if(b&&b.parentElement) b.parentElement.style.display=on?"":"none"; }catch(e){}
   if(u) u.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); if(p) p.focus(); } };
   if(p) p.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLogin(); } };
   if(u) u.focus();
@@ -204,7 +216,7 @@ function go(view,opts={}){ CUR.view=view; if(opts.jobNo!==undefined)CUR.jobNo=op
   document.querySelectorAll('#sidebar button[data-view]').forEach(b=>b.classList.toggle("active",b.dataset.view===view)); closeNav(); render(); }
 function render(){ const v=CUR.view;
   if(v==="dashboard")dashboard(); else if(v==="new")newJob(); else if(v==="entry")entry(); else if(v==="lookup")lookup();
-  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="templates")templatesPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
+  else if(v==="exec")execDashboard(); else if(v==="capa")capaPage(); else if(v==="ncr")ncrPage(); else if(v==="checklists")checklistsPage(); else if(v==="equip")equipmentPage(); else if(v==="spc")spcPage(); else if(v==="reports")reports(); else if(v==="suppliers")suppliersPage(); else if(v==="team")team(); else if(v==="audit")auditTrail(); else if(v==="integrations")integrationsPage(); else if(v==="templates")templatesPage(); else if(v==="settings")settings(); else if(v==="account")myAccount();
   else dashboard(); }
 
 /* ---------- dashboard ---------- */
@@ -259,6 +271,23 @@ async function exportXls(){
     const blob=await r.blob(); const url=URL.createObjectURL(blob); const a=document.createElement("a");
     a.href=url; a.download="golden-qa-report.xls"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); toast("Excel report exported"); }
   catch(e){ toast("Export failed — are you online?"); }
+}
+/* Authenticated file download (token travels in the x-token header, so a plain <a href> won't do). */
+async function dlAuth(url, filename){
+  try{ const r=await fetch(url,{headers:hdrs()}); if(!r.ok) throw new Error("HTTP "+r.status);
+    const blob=await r.blob(); const u=URL.createObjectURL(blob); const a=document.createElement("a");
+    a.href=u; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u); toast("Downloaded "+filename); }
+  catch(e){ toast("Download failed — are you online?"); }
+}
+/* Amendments History for one record: who changed what (field: from → to) and when. */
+async function openAmend(recordId, label){
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:820px"><h2>Amendments History</h2><p class="sub">${esc(label||recordId)}</p><div id="amendbody"><div class="empty">Loading…</div></div><div class="row-actions"><button class="btn ghost" onclick="closeModal()">Close</button></div></div></div>`;
+  let list=[]; try{ list=await api("/api/audit?recordId="+encodeURIComponent(recordId)); }catch(e){ $("#amendbody").innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  const rows=list.map(e=>{
+    const chg=(e.changes&&e.changes.length)?e.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):`<span style="color:var(--muted)">${esc(e.detail||e.action)}</span>`;
+    return `<tr><td style="white-space:nowrap">${esc((e.ts||'').replace('T',' ').slice(0,16))}</td><td>${esc(e.user)}</td><td>${esc(e.action)}</td><td>${chg}</td></tr>`;
+  }).join("");
+  $("#amendbody").innerHTML=list.length?`<div style="overflow-x:auto"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Changes</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No amendments recorded for this record.</div>`;
 }
 
 /* ---------- new job ---------- */
@@ -494,7 +523,14 @@ async function saveStage(stage,done){ let data=collectStageData(stage); data._do
     const miss=validateStageData(stage,data);
     if(miss.length){ toast("Can't complete — missing: "+miss.join(", ")); return; }
   }
-  try{ await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/stage/"+stage.slice(-1),{method:"PUT",body:{data},queueable:true,optimistic:{}}); toast(done?"Stage complete":"Draft saved"); go("entry",{jobNo:JOB.jobNo,stage}); }
+  try{
+    await api("/api/jobs/"+encodeURIComponent(JOB.jobNo)+"/stage/"+stage.slice(-1),{method:"PUT",body:{data},queueable:true,optimistic:{}});
+    // Reflect the saved stage locally and in the GET cache, so the re-render below shows the
+    // entered data even when offline (where the reload falls back to that cache) — otherwise the
+    // form would blank out and a re-entry could overwrite this save on sync.
+    if(JOB){ JOB[stage]=data; updateJobCache(JOB); }
+    toast(done?"Stage complete":"Draft saved"); go("entry",{jobNo:JOB.jobNo,stage});
+  }
   catch(e){ toast(e.message); }
 }
 
@@ -530,7 +566,7 @@ async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); i
   const b=j.stage2||{}; let s2h=""; if(b._done){ s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b); }
   const e=j.stage3||{}; let s3h=""; if(e._done){ const ps=e.productionSummary||e.rolls||[]; s3h=kvb([["Date",e.date],["Operator",e.operatorName],["QA Officer",e.qaOfficer],["Start",e.startTime],["Finish",e.finishTime],["Infeed Material",e.infeedMaterial]])+`<h4>Production Summary</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Source</th><th>Input m</th><th>Output m</th><th># Sheets</th><th>Pallet</th></tr></thead><tbody>${ps.map(r=>`<tr><td>${esc(r.roll||r.no||"")}</td><td>${esc(r.source||"")}</td><td>${esc(r.inputMeters||"")}</td><td>${esc(r.outputMeters||r.totalSheets||"")}</td><td>${esc(r.sheets||"")}</td><td>${esc(r.pallet||"")}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(e); }
   const f=j.stage4||{}; let s4h=""; if(f._done){ const pillVal=v=>(v==="Pass"||v==="Correct"||v==="Tight"||v==="Flat")?'<span class="pill green">'+esc(v)+'</span>':(v==="Fail"||v==="Incorrect"||v==="Loose"||v==="Curl")?'<span class="pill red">'+esc(v)+'</span>':esc(v||"—"); const hdr=`<tr><th>Time</th>${HOURLY_COLS.map(col=>`<th title="${esc(col.k)}">${esc(col.k.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${HOURLY_COLS.map(col=>`<td>${pillVal(c.vals&&c.vals[col.k])}</td>`).join("")}</tr>`).join("")||`<tr><td colspan=${HOURLY_COLS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Qty On-Hold",f.quantityOnHold],["Disposition",f.disposition],["Handover",f.nextShiftQaHandover]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
-  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
+  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
 
@@ -597,7 +633,7 @@ function renderCapaRows(){
   if(q) list=list.filter(c=>((c.jobNo||"")+" "+(c.title||"")+" "+(c.owner||"")).toLowerCase().includes(q));
   const tb=$("#capabody"); if(!tb)return;
   tb.innerHTML=list.map(c=>{ const overdue=c.status!=='Closed'&&c.dueDate&&c.dueDate<today;
-    return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button></td>`:''}</tr>`;
+    return `<tr><td><b>${esc(c.id)}</b></td><td>${c.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(c.jobNo)}'})">${esc(c.jobNo)}</button>`:'—'}</td><td>${esc(c.title)}</td><td>${capaSevPill(c.severity)}</td><td>${esc(c.owner||'—')}</td><td>${c.dueDate?(overdue?`<span class="flag bad">${esc(c.dueDate)} ⚠</span>`:esc(c.dueDate)):'—'}</td><td>${capaStatusPill(c.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="capaModal('${jsq(c.id)}')">Open</button> <button class="btn ghost sm" onclick="openAmend('${jsq(c.id)}','${jsq(c.id)}')">Amendments</button></td>`:''}</tr>`;
   }).join("");
   const e=$("#capaempty"); if(e)e.classList.toggle("hidden",!!list.length);
 }
@@ -658,7 +694,7 @@ function renderNcrRows(){
   if(st) list=list.filter(n=>n.status===st);
   if(q) list=list.filter(n=>((n.id||"")+" "+(n.jobNo||"")+" "+(n.description||"")).toLowerCase().includes(q));
   const tb=$("#ncbody"); if(!tb)return;
-  tb.innerHTML=list.map(n=>`<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button></td>`:''}</tr>`).join("");
+  tb.innerHTML=list.map(n=>`<tr><td><b>${esc(n.id)}</b></td><td>${n.jobNo?`<button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(n.jobNo)}'})">${esc(n.jobNo)}</button>`:'—'}</td><td>${esc(n.date)}</td><td>${esc(n.description)}</td><td>${esc(n.disposition)}</td><td>${capaSevPill(n.severity)}</td><td>${n.capaId?`<button class="btn ghost sm" onclick="go('capa')">${esc(n.capaId)}</button>`:(canManage?`<button class="btn ghost sm" onclick="promoteNcr('${jsq(n.id)}')">Raise CAPA</button>`:'—')}</td><td>${ncrStatusPill(n.status)}</td>${canManage?`<td class="no-print"><button class="btn ghost sm" onclick="ncrModal('${jsq(n.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(n.id)}','${jsq(n.id)}')">Amendments</button></td>`:''}</tr>`).join("");
   const e=$("#ncempty"); if(e)e.classList.toggle("hidden",!!list.length);
 }
 function ncrModal(id){
@@ -689,7 +725,7 @@ async function equipmentPage(){
   const overdue=list.filter(e=>e.calStatus==='Overdue').length, dueSoon=list.filter(e=>e.calStatus==='Due soon').length;
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div><h2 style="margin:0">Equipment &amp; Calibration</h2><p class="sub" style="margin:4px 0 0">${list.length} items · ${overdue} overdue · ${dueSoon} due soon.</p></div>
-      <div style="margin-left:auto" class="no-print">${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="dlAuth('/api/equipment/calibration-history.csv','golden-qa-calibration-history.csv')">⤓ Calibration history (CSV)</button> ${canManage?`<button class="btn gold" onclick="equipModal()">+ Add equipment</button>`:''}</div></div>
     <div class="grid g3 no-print" style="margin:4px 0 14px">
       <div class="field"><label>Status</label><select id="eq_status" onchange="renderEquipRows()"><option value="">All</option><option>OK</option><option>Due soon</option><option>Overdue</option><option>Retired</option><option>Unscheduled</option></select></div>
       <div class="field"><label>Search</label><input id="eq_q" placeholder="Name, type, machine, owner" oninput="renderEquipRows()"></div>
@@ -705,7 +741,7 @@ function renderEquipRows(){
   const tb=$("#eqbody"); if(!tb)return;
   tb.innerHTML=list.map(e=>{ const overdue=e.calStatus==='Overdue', soon=e.calStatus==='Due soon';
     const due=e.nextDue?`${esc(e.nextDue)}${e.daysToDue!=null?` <span style="color:var(--muted);font-size:12px">(${e.daysToDue<0?Math.abs(e.daysToDue)+'d ago':'in '+e.daysToDue+'d'})</span>`:''}`:'—';
-    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${equipStatusPill(e.calStatus)}</td>${canManage?`<td class="no-print"><button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button></td>`:''}</tr>`;
+    return `<tr><td><b>${esc(e.id)}</b></td><td>${esc(e.name)}</td><td>${esc(e.type)}</td><td>${e.machine?`<span class="tag-machine">${esc(mlabel(e.machine))}</span>`:'—'}</td><td>${esc(e.calibratedOn||'—')}</td><td class="${overdue?'flag bad':(soon?'flag':'')}">${due}</td><td>${equipStatusPill(e.calStatus)}</td>${canManage?`<td class="no-print"><button class="btn gold sm" onclick="calibrateModal('${jsq(e.id)}')">Calibrate</button> <button class="btn ghost sm" onclick="equipHistoryModal('${jsq(e.id)}')">History</button> <button class="btn ghost sm" onclick="equipModal('${jsq(e.id)}')">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(e.id)}','${jsq(e.id+' · '+e.name)}')">Amendments</button></td>`:''}</tr>`;
   }).join("");
   const em=$("#eqempty"); if(em)em.classList.toggle("hidden",!!list.length);
 }
@@ -717,37 +753,147 @@ function equipModal(id){
     <div class="field"><label>Name <span class="req">*</span></label><input id="eq_name" value="${esc(e?e.name:'')}" placeholder="e.g. GS1 Barcode Verifier"></div>
     <div class="grid g2">
       <div class="field"><label>Type</label><select id="eq_type">${typeOpts}</select></div>
-      <div class="field"><label>Asset / serial</label><input id="eq_ident" value="${esc(e?e.identifier:'')}"></div>
+      <div class="field"><label>Asset ID / tag</label><input id="eq_ident" value="${esc(e?e.identifier:'')}"></div>
+      <div class="field"><label>Model #</label><input id="eq_model" value="${esc(e?(e.model||''):'')}"></div>
+      <div class="field"><label>Serial #</label><input id="eq_serial" value="${esc(e?(e.serial||''):'')}"></div>
       <div class="field"><label>Machine (optional)</label><select id="eq_machine">${machineOpts}</select></div>
       <div class="field"><label>Location</label><input id="eq_loc" value="${esc(e?e.location:'')}"></div>
-      <div class="field"><label>Last calibrated</label><input id="eq_calon" type="date" value="${esc(e?e.calibratedOn:'')}"></div>
+      ${e?'':`<div class="field"><label>Last calibrated</label><input id="eq_calon" type="date" value=""></div>`}
       <div class="field"><label>Interval (days)</label><input id="eq_interval" type="number" min="0" value="${esc(e?e.calibrationIntervalDays:'365')}"></div>
       <div class="field"><label>Owner</label><input id="eq_owner" value="${esc(e?e.owner:'')}"></div>
       ${e?`<div class="field"><label>Status</label><select id="eq_active"><option value="true" ${e.active!==false?'selected':''}>Active</option><option value="false" ${e.active===false?'selected':''}>Retired</option></select></div>`:''}
     </div>
+    ${e?`<p class="sub" style="margin:2px 0 0">The last-calibrated date is set only by recording a calibration (keeps the history accurate).</p>`:''}
     <div class="field"><label>Notes</label><textarea id="eq_notes">${esc(e?e.notes:'')}</textarea></div>
     <div class="row-actions"><button class="btn gold" onclick="saveEquip(${e?`'${jsq(e.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
 async function saveEquip(id){
-  const body={ name:val("eq_name").trim(), type:val("eq_type"), identifier:val("eq_ident").trim(), machine:val("eq_machine"), location:val("eq_loc").trim(), calibratedOn:val("eq_calon"), calibrationIntervalDays:Number(val("eq_interval"))||0, owner:val("eq_owner").trim(), notes:val("eq_notes") };
+  const body={ name:val("eq_name").trim(), type:val("eq_type"), identifier:val("eq_ident").trim(), model:val("eq_model").trim(), serial:val("eq_serial").trim(), machine:val("eq_machine"), location:val("eq_loc").trim(), calibrationIntervalDays:Number(val("eq_interval"))||0, owner:val("eq_owner").trim(), notes:val("eq_notes") };
+  const calon=document.getElementById("eq_calon"); if(calon && calon.value) body.calibratedOn=calon.value;
   if(!body.name){ toast("Equipment name is required"); return; }
   const act=document.getElementById("eq_active"); if(act) body.active=(act.value==='true');
   try{ if(id) await api("/api/equipment/"+encodeURIComponent(id),{method:"PUT",body}); else await api("/api/equipment",{method:"POST",body});
     closeModal(); toast("Equipment saved"); equipmentPage();
   }catch(e){ toast(e.message); }
 }
+/* F-009 Calibration Recording Form. Readings are held in window._calRead while the modal is open. */
+function calReadRows(){ const b=$("#calread"); if(!b)return; b.innerHTML=window._calRead.map((r,i)=>`<tr><td><input value="${esc(r.reference||'')}" oninput="window._calRead[${i}].reference=this.value" placeholder="e.g. 10.00"></td><td><input value="${esc(r.machineOutput||'')}" oninput="window._calRead[${i}].machineOutput=this.value" placeholder="machine reading"></td><td><button class="btn danger sm" onclick="window._calRead.splice(${i},1);if(!window._calRead.length)window._calRead.push({});calReadRows()">×</button></td></tr>`).join(""); }
+function calReadAdd(){ window._calRead.push({}); calReadRows(); }
 function calibrateModal(id){ const e=(window._equip||[]).find(x=>x.id===id); if(!e)return;
-  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Record calibration</h2><p class="sub">${esc(e.id)} · ${esc(e.name)}</p>
+  window._calRead=[{},{},{}];
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:820px"><h2>Record calibration — F-009</h2><p class="sub">${esc(e.id)} · ${esc(e.name)}${e.model?' · Model '+esc(e.model):''}${e.serial?' · S/N '+esc(e.serial):''}</p>
     <div class="grid g3">
       <div class="field"><label>Date</label><input id="cal_on" type="date" value="${esc(new Date().toISOString().slice(0,10))}"></div>
-      <div class="field"><label>Result</label><select id="cal_result"><option>Pass</option><option>Pass (adjusted)</option><option>Fail</option></select></div>
-      <div class="field"><label>Interval (days)</label><input id="cal_interval" type="number" min="0" value="${esc(e.calibrationIntervalDays||365)}"></div>
+      <div class="field"><label>QA Technician</label><input id="cal_tech" value="${esc(ME?ME.name:'')}"></div>
+      <div class="field"><label>Result</label><select id="cal_result" onchange="document.getElementById('cal_failwrap').style.display=this.value==='Fail'?'':'none'"><option>Pass</option><option>Pass (adjusted)</option><option>Fail</option></select></div>
     </div>
-    <div class="field"><label>Notes</label><textarea id="cal_notes" placeholder="Standard used, as-found reading, technician…"></textarea></div>
+    <h4 style="margin:12px 0 4px">Calibration results</h4>
+    <div style="overflow-x:auto"><table><thead><tr><th>Reference</th><th>Machine output</th><th></th></tr></thead><tbody id="calread"></tbody></table></div>
+    <div class="row-actions"><button class="btn ghost sm" onclick="calReadAdd()">+ Add reading</button></div>
+    <div id="cal_failwrap" style="display:none"><div class="field"><label>Reason for failure</label><input id="cal_failreason"></div></div>
+    <div class="grid g3">
+      <div class="field"><label>Calibration sticker</label><select id="cal_sticker"><option>Yes</option><option>No</option><option>N/A</option></select></div>
+      <div class="field"><label>Interval (days)</label><input id="cal_interval" type="number" min="0" value="${esc(e.calibrationIntervalDays||365)}"></div>
+      <div class="field"><label>Next calibration due</label><input id="cal_next" type="date" value=""></div>
+      <div class="field"><label>Date out of service</label><input id="cal_oos" type="date" value=""></div>
+    </div>
+    <label style="text-transform:none;font-weight:600;display:flex;align-items:center;gap:8px;margin:2px 0"><input type="checkbox" id="cal_reg" checked style="width:auto;min-height:0">Calibration Register updated</label>
+    <div class="field"><label>Comments</label><textarea id="cal_notes" placeholder="Standard used, as-found/as-left, observations…"></textarea></div>
     <div class="row-actions"><button class="btn gold" onclick="doCalibrate('${jsq(e.id)}')">Save calibration</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
+  calReadRows();
 }
-async function doCalibrate(id){ const body={ on:val("cal_on"), result:val("cal_result"), intervalDays:Number(val("cal_interval"))||undefined, notes:val("cal_notes") };
+async function doCalibrate(id){
+  const readings=(window._calRead||[]).map(r=>({reference:(r.reference||'').trim(),machineOutput:(r.machineOutput||'').trim()})).filter(r=>r.reference||r.machineOutput);
+  const body={ on:val("cal_on"), technician:val("cal_tech").trim(), result:val("cal_result"), intervalDays:Number(val("cal_interval"))||undefined,
+    readings, sticker:val("cal_sticker"), reasonForFailure:(document.getElementById("cal_failreason")||{}).value||"",
+    registerUpdated:$("#cal_reg").checked, nextDue:val("cal_next"), outOfService:val("cal_oos"), comments:val("cal_notes") };
   try{ await api("/api/equipment/"+encodeURIComponent(id)+"/calibrate",{method:"POST",body}); closeModal(); toast("Calibration recorded"); equipmentPage(); }catch(e){ toast(e.message); }
+}
+async function equipHistoryModal(id){
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:860px"><h2>Calibration history</h2><div id="histbody"><div class="empty">Loading…</div></div><div class="row-actions"><button class="btn ghost" onclick="dlAuth('/api/equipment/calibration-history.csv','golden-qa-calibration-history.csv')">⤓ Export all (CSV)</button><button class="btn ghost" onclick="closeModal()">Close</button></div></div></div>`;
+  let d; try{ d=await api("/api/equipment/"+encodeURIComponent(id)+"/history"); }catch(e){ $("#histbody").innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  const rows=(d.history||[]).map(h=>{ const rd=(h.readings||[]).map(r=>esc(r.reference)+'→'+esc(r.machineOutput)).join(', ');
+    return `<tr><td style="white-space:nowrap">${esc(h.on)}</td><td>${esc(h.technician||h.by||'')}</td><td>${statusPillCal(h.result)}</td><td>${rd||'—'}</td><td>${esc(h.sticker||'')}</td><td>${esc(h.nextDue||'')}</td><td>${esc(h.comments||h.notes||'')}</td></tr>`; }).join("");
+  $("#histbody").innerHTML=`<p class="sub">${esc(d.id)} · ${esc(d.name)}${d.model?' · Model '+esc(d.model):''}${d.serial?' · S/N '+esc(d.serial):''}</p>`+(rows?`<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Technician</th><th>Result</th><th>Readings (ref→output)</th><th>Sticker</th><th>Next due</th><th>Comments</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty">No calibrations recorded yet.</div>`);
+}
+function statusPillCal(r){ const bad=String(r||'').toLowerCase().indexOf('fail')>=0; return `<span class="pill ${bad?'red':'green'}">${esc(r||'')}</span>`; }
+
+/* ---------- Checklists (F-012 hygiene, F-013B GMP, …) ---------- */
+function chkRespOpts(def){ return def && def.responseType==='yesno' ? ['','Yes','No'] : ['','Yes','X']; }
+function chkStatusPill(s){ if(s==='Yes') return '<span class="pill green">Yes</span>'; if(s==='X'||s==='No') return '<span class="pill red">'+esc(s)+'</span>'; return '<span class="pill grey">—</span>'; }
+async function checklistsPage(){
+  app().innerHTML=`<div class="empty">Loading…</div>`;
+  let defs=[], subs=[];
+  try{ defs=await api("/api/checklist-defs"); subs=await api("/api/checklists"); }catch(e){ app().innerHTML=`<div class="card"><div class="empty">Could not load — ${esc(e.message)}</div></div>`; return; }
+  window._chkDefs=defs; window._chkSubs=subs;
+  const opts=defs.filter(d=>d.active!==false).map(d=>`<option value="${esc(d.id)}">${esc(d.code)} — ${esc(d.title)}</option>`).join("");
+  app().innerHTML=`<div class="card no-print">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><h2 style="margin:0">Checklists</h2><p class="sub" style="margin:4px 0 0">Daily hygiene, GMP and other sign-off checklists.</p></div>
+      <div style="margin-left:auto"><button class="btn ghost" onclick="dlAuth('/api/export/workbook.xls','golden-qa-report.xls')">⤓ Export (Excel)</button></div></div>
+      <div class="field" style="max-width:520px;margin-top:8px"><label>New checklist</label><select id="chk_def" onchange="chkPick()"><option value="">— Select a checklist —</option>${opts}</select></div>
+      <div id="chkform"></div>
+    </div>
+    <div class="card"><h3 style="margin-top:0">Recent submissions</h3><div id="chklist"></div></div>`;
+  chkRenderList();
+}
+function chkRenderList(){
+  const subs=(window._chkSubs||[]); const host=$("#chklist"); if(!host)return;
+  if(!subs.length){ host.innerHTML=`<div class="empty">No checklists submitted yet.</div>`; return; }
+  const canMgr=isMgrRole();
+  host.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Date</th><th>Shift</th><th>Status</th><th>Completed by</th><th>Verified by</th><th class="no-print"></th></tr></thead><tbody>${subs.map(s=>{
+    const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
+    const pill=s.status==='Verified'?'<span class="pill green">Verified</span>':(s.status==='Completed'?'<span class="pill amber">Completed</span>':'<span class="pill grey">Draft</span>');
+    const canVerify=canMgr && s.status==='Completed';
+    return `<tr><td><b>${esc(s.code)}</b></td><td>${esc(s.title)}${bad?` <span class="pill red" title="Unsatisfactory items">${bad}✕</span>`:''}</td><td>${esc(s.date)}</td><td>${esc(s.shift||'—')}</td><td>${pill}</td><td>${esc(s.completedByName||s.completedBy||'')}</td><td>${esc(s.verifiedByName||s.verifiedBy||'—')}</td><td class="no-print"><button class="btn ghost sm" onclick="chkView('${jsq(s.id)}')">View</button> ${canVerify?`<button class="btn gold sm" onclick="chkVerify('${jsq(s.id)}')">Verify</button>`:''} <button class="btn ghost sm" onclick="openAmend('${jsq(s.id)}','${jsq(s.code+' '+s.date)}')">Amendments</button></td></tr>`;
+  }).join("")}</tbody></table></div>`;
+}
+function chkPick(){
+  const id=val("chk_def"); const def=(window._chkDefs||[]).find(d=>d.id===id); const host=$("#chkform"); if(!host)return;
+  if(!def){ host.innerHTML=""; return; }
+  if(!def.items||!def.items.length){ host.innerHTML=`<div class="banner warn" style="margin-top:12px">This checklist has no items yet. An administrator can add them in <b>Settings → Checklist forms</b>.</div>`; return; }
+  // Responses keyed by item key (headers are skipped) so section rows don't shift indexes.
+  window._chkResp={}; def.items.forEach(it=>{ if(!it.header) window._chkResp[it.key]={itemKey:it.key,status:'',correctiveAction:''}; });
+  const opts=chkRespOpts(def);
+  const cols=def.hasCorrectiveAction?3:2;
+  const rows=def.items.map(it=>{
+    if(it.header) return `<tr><td colspan="${cols}" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
+    return `<tr><td style="max-width:520px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}</tr>`;
+  }).join("");
+  host.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <div class="grid g3">
+      <div class="field"><label>Date</label><input id="chk_date" type="date" value="${esc(new Date().toISOString().slice(0,10))}"></div>
+      <div class="field"><label>Shift</label><input id="chk_shift" placeholder="Day / Night"></div>
+      <div class="field"><label>Completed by</label><input id="chk_by" value="${esc(ME?ME.name:'')}"></div>
+    </div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th>${def.hasCorrectiveAction?'<th>Corrective action / comment</th>':''}</tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="field"><label>Comments</label><textarea id="chk_comments"></textarea></div>
+    <div class="row-actions"><button class="btn" onclick="chkSave(false)">Save draft</button><button class="btn gold" onclick="chkSave(true)">Save &amp; mark complete</button></div>
+    <p class="sub">A second person (Supervisor+) verifies a completed checklist from the list below.</p>
+  </div>`;
+}
+async function chkSave(complete){
+  const defId=val("chk_def"); if(!defId){ toast("Pick a checklist"); return; }
+  const body={ defKey:defId, date:val("chk_date"), shift:val("chk_shift").trim(), completedByName:val("chk_by").trim(), comments:val("chk_comments"), responses:Object.values(window._chkResp||{}), status:complete?'Completed':'Draft' };
+  try{ await api("/api/checklists",{method:"POST",body,queueable:true,optimistic:{}}); toast(complete?"Checklist completed":"Draft saved"); checklistsPage(); }catch(e){ toast(e.message); }
+}
+async function chkVerify(id){ if(!confirm("Verify this checklist? You confirm the checks were done correctly.")) return; try{ await api("/api/checklists/"+encodeURIComponent(id)+"/verify",{method:"POST",body:{}}); toast("Checklist verified"); checklistsPage(); }catch(e){ toast(e.message); } }
+async function chkView(id){
+  let s; try{ s=await api("/api/checklists/"+encodeURIComponent(id)); }catch(e){ toast(e.message); return; }
+  let def=(window._chkDefs||[]).find(d=>d.id===s.defKey);
+  if(!def){ try{ def=(await api("/api/checklist-defs")).find(d=>d.id===s.defKey); }catch(e){} }
+  def=def||{items:[]};
+  const respOf={}; (s.responses||[]).forEach(r=>{ respOf[r.itemKey]=r; });
+  // Render in the definition's order, showing section headers; fall back to stored responses if the def is gone.
+  const src=(def.items&&def.items.length)?def.items:(s.responses||[]).map(r=>({key:r.itemKey,label:r.itemKey}));
+  const rows=src.map(it=>{
+    if(it.header) return `<tr><td colspan="3" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
+    const r=respOf[it.key]||{}; return `<tr><td style="max-width:520px">${esc(it.label)}</td><td>${chkStatusPill(r.status)}</td><td>${esc(r.correctiveAction||'')}</td></tr>`;
+  }).join("");
+  $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:820px"><h2>${esc(s.code)} — ${esc(s.title)}</h2>
+    <p class="sub">${esc(s.date)}${s.shift?' · '+esc(s.shift):''} · Completed by ${esc(s.completedByName||s.completedBy||'')}${s.verifiedByName?' · Verified by '+esc(s.verifiedByName):''}</p>
+    <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th><th>Corrective action / comment</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${s.comments?`<h4>Comments</h4><p>${esc(s.comments)}</p>`:''}
+    <div class="row-actions no-print"><button class="btn gold" onclick="window.print()">📄 Print</button><button class="btn ghost" onclick="closeModal()">Close</button></div></div></div>`;
 }
 
 /* executive dashboard (RAG vs targets) */
@@ -908,14 +1054,40 @@ async function team(){
 }
 /* audit trail */
 async function auditTrail(){
-  const canManage=isMgrRole();
-  let audit=[]; try{ audit=await api("/api/audit"); }catch(e){}
   app().innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <div><h2 style="margin:0">Audit Trail</h2><p class="sub" style="margin:4px 0 0">Tamper-evident log of the latest 300 actions (HMAC-chained).</p></div>
-      ${canManage?`<div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="verifyAudit()">Verify integrity</button></div>`:''}</div>
+      <div><h2 style="margin:0">Amendments History</h2><p class="sub" style="margin:4px 0 0">Tamper-evident (HMAC-chained) log of every entry and change — who, when, and what value changed.</p></div>
+      <div style="margin-left:auto" class="no-print"><button class="btn ghost" onclick="verifyAudit()">Verify integrity</button> <button class="btn ghost" onclick="auditExport()">⤓ Export CSV</button></div></div>
     <div id="auditVerify" class="no-print" style="margin:6px 0 12px"></div>
-    <div style="overflow-x:auto;max-height:72vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Job</th><th>Detail</th></tr></thead><tbody>${audit.length?audit.map(x=>`<tr><td>${esc(x.ts.replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.jobNo)}</td><td>${esc(x.detail)}</td></tr>`).join(""):`<tr><td colspan="5" style="color:var(--muted)">No audit entries yet.</td></tr>`}</tbody></table></div></div>`;
+    <div class="grid g4 no-print" style="margin-bottom:12px">
+      <div class="field"><label>Record ID / Job #</label><input id="au_rec" placeholder="e.g. CAPA-… or SK-24817" oninput="auditLoad()"></div>
+      <div class="field"><label>Type</label><select id="au_type" onchange="auditLoad()"><option value="">All</option><option value="job">Job / stage</option><option value="checklist">Checklist</option><option value="capa">CAPA</option><option value="ncr">NCR</option><option value="equipment">Equipment</option><option value="masterdata">Master data</option></select></div>
+      <div class="field"><label>From</label><input id="au_from" type="date" onchange="auditLoad()"></div>
+      <div class="field"><label>To</label><input id="au_to" type="date" onchange="auditLoad()"></div>
+    </div>
+    <div id="auditRows"><div class="empty">Loading…</div></div></div>`;
+  auditLoad();
 }
+function auditQuery(){ const p=new URLSearchParams(); const rec=val("au_rec").trim(); const t=val("au_type"), f=val("au_from"), to=val("au_to");
+  if(rec){ p.set('recordId',rec); p.set('jobNo',rec); } // match either a record id or a job number
+  if(t) p.set('recordType',t); if(f) p.set('from',f); if(to) p.set('to',to); p.set('limit','1000'); return p.toString(); }
+async function auditLoad(){
+  const host=$("#auditRows"); if(!host)return;
+  // recordId and jobNo are ANDed server-side; when the user types one value we want OR, so query twice if needed.
+  const rec=val("au_rec").trim();
+  let list=[];
+  try{
+    if(rec){ const base=new URLSearchParams(); const t=val("au_type"),f=val("au_from"),to=val("au_to"); if(t)base.set('recordType',t); if(f)base.set('from',f); if(to)base.set('to',to); base.set('limit','1000');
+      const byId=await api("/api/audit?recordId="+encodeURIComponent(rec)+"&"+base.toString());
+      const byJob=await api("/api/audit?jobNo="+encodeURIComponent(rec)+"&"+base.toString());
+      const seen=new Set(); list=[...byId,...byJob].filter(e=>{ const k=e.ts+e.action+(e.recordId||''); if(seen.has(k))return false; seen.add(k); return true; });
+    } else { list=await api("/api/audit?"+auditQuery()); }
+  }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  host.innerHTML=`<div style="overflow-x:auto;max-height:66vh;overflow-y:auto"><table><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Record</th><th>Changes</th></tr></thead><tbody>${list.length?list.map(x=>{
+    const chg=(x.changes&&x.changes.length)?x.changes.map(c=>`<div><b>${esc(c.field)}</b>: <span style="color:var(--muted)">${esc(String(c.from)||'∅')}</span> → ${esc(String(c.to)||'∅')}</div>`).join(""):esc(x.detail||'');
+    return `<tr><td style="white-space:nowrap">${esc((x.ts||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.recordId||x.jobNo||'')}</td><td>${chg}</td></tr>`;
+  }).join(""):`<tr><td colspan="5" style="color:var(--muted)">No matching amendments.</td></tr>`}</tbody></table></div>`;
+}
+function auditExport(){ dlAuth("/api/audit/export.csv?"+auditQuery(), "golden-qa-amendments-history.csv"); }
 async function verifyAudit(){ const host=$("#auditVerify"); if(host)host.innerHTML='<span class="sub">Checking…</span>';
   try{ const r=await api("/api/audit/verify");
     if(r.ok) host.innerHTML=`<div class="banner" style="background:var(--green-bg);border-color:#aee0bf;color:var(--green)">✓ Audit chain intact — ${r.checked} entr${r.checked===1?'y':'ies'} verified${r.legacy?(' ('+r.legacy+' legacy pre-upgrade, unchained)'):''}.</div>`;
@@ -935,6 +1107,7 @@ async function settings(){
     <div class="row-actions"><button class="btn gold sm" onclick="saveCompetency()">Save</button></div>
     <h3>Product types</h3><p class="sub" style="margin:2px 0 6px">One per line. These populate the <b>Product Type</b> dropdown when starting a new job.</p><textarea id="a_pt" style="min-height:150px">${esc((md.productTypes||[]).join("\n"))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveProducts()">Save product types</button></div>
     <h3>Defect types</h3><textarea id="a_def" style="min-height:80px">${esc((md.defectTypes||[]).join(", "))}</textarea><div class="row-actions"><button class="btn ghost sm" onclick="saveDefects()">Save defect list</button></div>
+    <h3>Checklist forms</h3><p class="sub" style="margin:2px 0 6px">The daily hygiene, GMP and other checklists. Edit each form's items (one per line); changes apply to new submissions.</p><div id="chkDefsAdmin"><div class="empty">Loading…</div></div>
     <h3>Backups &amp; storage</h3><div class="kv">
       <div><span>Storage driver</span><b>${esc(health?health.storage:'?')}</b></div>
       <div><span>Latest backup</span><b>${backups&&backups.latest?esc(backups.latest.name):'none found'}</b></div>
@@ -947,7 +1120,28 @@ async function settings(){
       <div class="banner warn">Restoring replaces the entire live database with the selected snapshot. A safety backup of the current data is taken automatically first.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:680px"><select id="rs_name" style="flex:1 1 auto">${(backups.files||[]).filter(f=>/^db-\d{8}-\d{6}\.json$/.test(f.name)).map(f=>`<option value="${esc(f.name)}">${esc(f.name)} — ${esc(f.sizeKB)} KB, ${esc(f.ageHours)} h ago</option>`).join("")||'<option value="">No snapshots found</option>'}</select><button class="btn danger" onclick="doRestore()">Restore</button></div>` : '' }
   </div>`;
+  chkDefsAdmin();
 }
+async function chkDefsAdmin(){
+  const host=$("#chkDefsAdmin"); if(!host)return;
+  let defs=[]; try{ defs=await api("/api/checklist-defs"); }catch(e){ host.innerHTML=`<div class="empty">${esc(e.message)}</div>`; return; }
+  window._chkDefsAdmin=defs;
+  host.innerHTML=defs.map((d,i)=>`<div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b>${esc(d.code||'(no code)')}</b> — ${esc(d.title)} <span class="pill grey">${esc(d.frequency||'')}</span> <span class="sub">${(d.items||[]).length} items</span></div>
+      <textarea id="cd_items_${i}" style="min-height:120px;margin-top:8px">${esc((d.items||[]).map(it=>it.label).join("\n"))}</textarea>
+      <div class="row-actions"><button class="btn ghost sm" onclick="saveChkDef(${i})">Save ${esc(d.code||d.title)} items</button></div>
+    </div>`).join("")+`
+    <div style="border:1px dashed var(--line-strong);border-radius:8px;padding:12px">
+      <div class="grid g3"><div class="field"><label>New form code</label><input id="cd_new_code" placeholder="e.g. F-020"></div><div class="field"><label>Title</label><input id="cd_new_title" placeholder="e.g. Warehouse GMP Checklist"></div><div class="field"><label>Frequency</label><select id="cd_new_freq"><option>daily</option><option>shift</option><option>weekly</option><option>monthly</option><option>ad-hoc</option></select></div></div>
+      <div class="field"><label>Items (one per line)</label><textarea id="cd_new_items" style="min-height:90px"></textarea></div>
+      <div class="row-actions"><button class="btn gold sm" onclick="addChkDef()">Add checklist form</button></div>
+    </div>`;
+}
+function cdItems(text){ return String(text||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map((label,i)=>({key:'i'+(i+1),label})); }
+async function saveChkDef(i){ const d=window._chkDefsAdmin[i]; const items=cdItems(val("cd_items_"+i));
+  try{ await api("/api/checklist-defs/"+encodeURIComponent(d.id),{method:"PUT",body:{code:d.code,title:d.title,frequency:d.frequency,responseType:d.responseType,hasCorrectiveAction:d.hasCorrectiveAction,requireVerify:d.requireVerify,active:d.active,items}}); toast("Saved "+(d.code||d.title)); chkDefsAdmin(); }catch(e){ toast(e.message); } }
+async function addChkDef(){ const title=val("cd_new_title").trim(); if(!title){ toast("Title is required"); return; }
+  try{ await api("/api/checklist-defs",{method:"POST",body:{code:val("cd_new_code").trim(),title,frequency:val("cd_new_freq"),responseType:'satisfactory',items:cdItems(val("cd_new_items"))}}); toast("Checklist form added"); chkDefsAdmin(); }catch(e){ toast(e.message); } }
 async function doRestore(){ const name=val("rs_name"); if(!name){ toast("No backup selected"); return; }
   if(!confirm("Restore '"+name+"'? This replaces ALL current data. A safety backup is taken first.")) return;
   try{ const r=await api("/api/admin/restore",{method:"POST",body:{name}}); toast("Restored "+r.restored+" — "+r.jobs+" jobs, "+r.users+" users"); MD=await api("/api/masterdata"); go("dashboard"); }catch(e){ toast(e.message); }
@@ -967,30 +1161,31 @@ function myAccount(){
       <div class="field"><label>Confirm new password</label><input id="pw_cf" type="password" autocomplete="new-password"></div>
     </div>
     <div class="row-actions"><button class="btn gold" onclick="changePassword()">Update password</button></div>
-    <p class="sub" style="margin-top:8px">Signed in with Microsoft 365? Manage your password in your Microsoft account instead.</p>
+    <p class="sub" style="margin-top:8px">Signed in via Active Directory or Microsoft? Change your password in your directory account — not here.</p>
     <div class="row-actions" style="margin-top:18px;border-top:1px solid var(--line);padding-top:16px"><button class="btn ghost" onclick="logout()">Sign out</button></div></div>`;
 }
 async function changePassword(){ const cur=val("pw_cur"), nw=val("pw_new"), cf=val("pw_cf");
   if(!cur||!nw){ toast("Enter your current and new password"); return; }
   if(nw.length<6){ toast("New password must be at least 6 characters"); return; }
   if(nw!==cf){ toast("New passwords don't match"); return; }
-  try{ await api("/api/me/password",{method:"POST",body:{current:cur,new:nw}}); toast("Password updated"); ["pw_cur","pw_new","pw_cf"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); }catch(e){ toast(e.message); }
+  try{ const r=await api("/api/me/password",{method:"POST",body:{current:cur,new:nw}}); if(r&&r.token){ TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); } toast("Password updated"); ["pw_cur","pw_new","pw_cf"].forEach(id=>{ const e=document.getElementById(id); if(e)e.value=""; }); }catch(e){ toast(e.message); }
 }
 function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>${u?'Edit user':'Add user'}</h2>
     <div class="field"><label>User ID <span class="req">*</span></label><input id="u_id" value="${u?esc(u.id):''}" ${u?'disabled':''} placeholder="e.g. jsmith"></div>
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
+    <div class="field"><label>E-mail (optional; matches a Microsoft/Entra SSO identity)</label><input id="u_email" type="email" autocapitalize="none" value="${u?esc(u.email||''):''}" placeholder="e.g. jsmith@golden.com.fj"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
     <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${[1,2,3,4].map(s=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${s}" ${u&&(u.qualifiedStages||[]).map(Number).includes(s)?'checked':''} style="width:auto;min-height:0;margin-right:6px">Stage ${s}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
     <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>
     <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }
-async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass");
+async function saveUser(id){ const name=val("u_name").trim(), role=val("u_role"), password=val("u_pass"), email=val("u_email").trim();
   if(!name){ toast("Name is required"); return; }
   const qualifiedStages=[...document.querySelectorAll('.u_qs:checked')].map(c=>Number(c.value));
   try{
-    if(id){ const body={name,role,qualifiedStages}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
-    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,password,qualifiedStages}}); }
+    if(id){ const body={name,role,email,qualifiedStages}; if(password){ if(password.length<6){ toast("Password must be at least 6 characters"); return; } body.password=password; } await api("/api/admin/users/"+encodeURIComponent(id),{method:"PUT",body}); }
+    else { const uid=val("u_id").trim(); if(!uid){ toast("User ID is required"); return; } if(password.length<6){ toast("Password must be at least 6 characters"); return; } await api("/api/admin/users",{method:"POST",body:{id:uid,name,role,email,password,qualifiedStages}}); }
     closeModal(); toast("User saved"); team();
   }catch(e){ toast(e.message); }
 }
