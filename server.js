@@ -48,6 +48,9 @@ async function loadDB() {
   if (!Array.isArray(DB.equipment)) DB.equipment = [];
   if (!Array.isArray(DB.templates)) DB.templates = [];
   if (!Array.isArray(DB.checklistDefs)) DB.checklistDefs = seedChecklistDefs(); // pre-load the standard SQF checklist forms
+  else { // backfill items for a standard form that shipped empty in an earlier version (e.g. F-013B)
+    seedChecklistDefs().forEach(seed => { const cur = DB.checklistDefs.find(d => d.code === seed.code); if (cur && (!Array.isArray(cur.items) || !cur.items.length) && seed.items.length) { cur.items = seed.items; cur.frequency = seed.frequency; } });
+  }
   if (!Array.isArray(DB.checklists)) DB.checklists = [];
   if (!Array.isArray(DB.apikeys)) DB.apikeys = [];
   if (!Array.isArray(DB.webhooks)) DB.webhooks = [];
@@ -235,10 +238,10 @@ function seedTemplates(){ const now='2026-06-20T00:00:00.000Z';
         stations:[{group:0,name:'1',uvSetting:'100%',anilox:'360',cylinderTeeth:'120',inkType:'',inkBatch:''}] } }
   ];
 }
-/* Standard SQF checklist forms. Items are admin-editable (Settings → Checklist forms). F-013B's
-   line items are a placeholder until the source form is provided; an admin fills them in the app. */
+/* Standard SQF checklist forms. Items are admin-editable (Settings → Checklist forms).
+   A "## Section" line is a section header (not answered); everything else is a checkable item. */
 function seedChecklistDefs(){ const now='2026-07-09T00:00:00.000Z';
-  const items = arr => arr.map((label,i)=>({ key:'i'+(i+1), label }));
+  const items = arr => { let n=0; return arr.map(label=>{ const header=/^##\s+/.test(label); return { key: header?('h'+(n)) : ('i'+(++n)), label: label.replace(/^##\s+/,''), header }; }); };
   return [
     { id:'CL-F012G', code:'F-012-G', title:'Pre-Operational Hygiene Checklist', frequency:'daily',
       responseType:'satisfactory', hasCorrectiveAction:true, requireVerify:true, active:true, createdBy:'system', createdAt:now, updatedAt:now,
@@ -261,9 +264,75 @@ function seedChecklistDefs(){ const now='2026-07-09T00:00:00.000Z';
         'Finished reels in packing area clearly segregated and labelled to avoid product cross contamination.',
         'All stock reels are clearly labelled and packed, stored in designated area.'
       ]) },
-    { id:'CL-F013B', code:'F-013B', title:'GMP Checklist', frequency:'daily',
+    { id:'CL-F013B', code:'F-013B', title:'GMP Checklist', frequency:'monthly',
       responseType:'satisfactory', hasCorrectiveAction:true, requireVerify:true, active:true, createdBy:'system', createdAt:now, updatedAt:now,
-      items: [] } // TODO: populate from the F-013B source form (Settings → Checklist forms)
+      items: items([
+        '## Personnel',
+        'Are the employees well-trained in what they do?',
+        'In handling food packaging products, do your employees wear the proper hair covering, beard covering, disposable gloves and clean uniforms?',
+        'Are the employees wearing jewelry, rings, watches, fingernail polish or bandages? Do the employees have any illnesses, infections or injuries (i.e., boils, cuts) that can contaminate foods in the production area?',
+        'Do all employees wash and sanitize their hands after each visit to the toilet? Do you have washing facilities available near their work stations? Do they use them when their hands become soiled or contaminated?',
+        'Do your employees maintain clean personal habits?',
+        'Is the traffic within your plant controlled to prevent contamination of the production area? Do visitors wear proper outfits and hairnets?',
+        'Have your employees been told the reasons why they should undertake the above precautions? Has this training been done through GMP classes? Is the training documented?',
+        '## Buildings and Facilities: Plant and Grounds',
+        'Is the area around your firm clear of litter, weeds, grass and brush?',
+        'Is there any standing water on your grounds (which also attracts pests)?',
+        'Are floors, walls, ceilings, windows and screens properly maintained and cleaned? There should be no flaking paint anywhere above the production area.',
+        'Do production area doors and windows to the outside have fine mesh screens to keep out insects? If not, are they tightly sealed?',
+        'Will a pencil pass under the door?',
+        'Have all holes and cracks been filled so as not to provide hiding places or entry points for pests?',
+        'Is there any evidence of the presence of domestic animals such as cats and dogs?',
+        'Are rest rooms cleaned regularly?',
+        'Are the hand-washing facilities furnished with paper or air hand dryers and soap?',
+        'Are there any leaks in the roof, sky lights, windows, screens or overhead piping?',
+        'Are the overhead lights covered with shields to prevent contamination of products by broken glass in case the lamps burst?',
+        'Are all incoming, outgoing service lines properly sealed?',
+        '## Sanitation Operations: Pest Control',
+        'Do you have professional pest control services?',
+        'Do you check regularly on what the pest control operator is doing?',
+        'Do you have documentation on what chemicals are being used?',
+        'Are mites, spiders, weevils or roaches apparent in the plant? There should be no evidence.',
+        'Do you have enough bait stations?',
+        'Are the pest control logs and documentation readily available?',
+        'Are pesticides or application equipment stored safely?',
+        'Are products stored on pallets and at least 18 inches away from the walls?',
+        'Is your facility well-maintained?',
+        '## Sanitary Facilities and Controls',
+        'Is trash, debris and clutter picked up, both inside and outside the plant, so as not to provide hiding places for pests?',
+        'Are all sanitation chemicals used in the plant USDA/FDA approved?',
+        'Do employees eat, drink and use tobacco products only in designated areas, and not in the production area or warehouse?',
+        'Is the food spilled or uneaten by employees cleaned up quickly so as not to attract pests or breed bacteria?',
+        'Is garbage quickly removed and dumped in appropriate bins? It should not sit around your facilities to attract pests and develop odors.',
+        'Is the garbage kept covered? An open garbage pile is an excellent breeding ground for insects and rodents.',
+        'Is the water used in your firm from an approved source (either municipal supply or tested private source)?',
+        'Have you made sure there are no hoses left dangling in sinks or on the ground? Loss of pressure can cause a back flow that will contaminate your water supply.',
+        'Do your facilities have back flow and vacuum breaker valves to prevent contamination of your water supply?',
+        'Is there standing water around your firm (particularly in the production area, warehouse and pack-off area)?',
+        '## Equipment',
+        'Is all equipment that comes in contact with food cleaned and sanitized as often as necessary to prevent contamination of the product? Follow appropriate cleaning schedules for each piece of equipment.',
+        'Is the equipment designed, or otherwise suitable, for use in a food plant? (e.g., equipment for handling or processing foods cannot contain polychlorinated biphenyls (PCBs), which are very toxic — this does not apply to electrical transformers and condensers containing PCBs in sealed containers.)',
+        'Is there a build-up of food or other material on the equipment? This can serve as a breeding place for insects and bacteria.',
+        'Is there any build-up or seepage of cleaning solvents or lubricants on your equipment, which can contaminate foods? All repairs should be of a permanent nature (e.g., no bobby pins in place of cotter pins), as temporary parts can break and get in the product.',
+        'Is the equipment hard to disassemble for clean-up and inspection? The more difficult it is, the less inclined you or an employee will be to clean it.',
+        'Is there a lot of "dead space" in or around the machinery where food and other debris can collect as a nest for insects and bacteria?',
+        'Can the surface of the equipment be sanitized?',
+        'Are supporting equipments such as stairs/catwalks fitted with catchments for containment of shoe transfers?',
+        'Are all equipments, their gauges and surfaces free of any temporary plastic covers?',
+        '## Production and Process Control',
+        'Are products stored on a first-in, first-out basis to reduce the possibility of contamination through spoilage? Are old products kept in front of the new to help the rotation process?',
+        'Are all incoming products dated to ensure proper rotation of stocks and for internal tracking purposes?',
+        'Are items overstocked? This increases the chances of spoilage and contamination.',
+        'Are incoming vehicles inspected?',
+        'Are dusty, faded or discolored containers checked regularly?',
+        'Are all products spoiled by damage, insects, rodents or other causes stored in a designated "Quarantine Area" to prevent contact with safe products?',
+        'Are such quarantined items disposed of quickly to prevent the development of pest breeding places?',
+        'Are incoming materials inspected for damage or contamination so that they can be rejected?',
+        'Are unused materials properly resealed to prevent contamination?',
+        'Are materials stored in a safe manner? Food-related items should not be stored with non-food items; materials stacked so vents and blowers are not blocked; stacks orderly for safety.',
+        'Do you have an effective recall procedure set up?',
+        'Are all raw materials, work-in-progress materials, finished goods, chemical containers and waste bins clearly labeled?'
+      ]) }
   ];
 }
 
@@ -424,10 +493,14 @@ const CHECKLIST_FREQ = ['daily','shift','weekly','monthly','ad-hoc'];
 const CHECKLIST_RESPONSE = ['satisfactory','yesno']; // satisfactory = Yes/X (F-012/F-013B); yesno = Yes/No
 /* Sanitise a checklist definition (admin-managed form template). */
 function cleanChecklistDef(b){
-  const items = Array.isArray(b.items) ? b.items.map((it,i)=>{
-    const label = typeof it==='string' ? it : String((it&&it.label)||'');
-    const key = (it&&it.key)?String(it.key):('i'+(i+1));
-    return { key, label: label.trim() };
+  // A "## Section" line (or an item with header:true) is a non-answerable section header.
+  let n=0, h=0;
+  const items = Array.isArray(b.items) ? b.items.map(it=>{
+    const raw = (typeof it==='string' ? it : String((it&&it.label)||'')).trim();
+    const header = /^##\s+/.test(raw) || !!(it && it.header);
+    const label = raw.replace(/^##\s+/,'');
+    const key = (it&&it.key)?String(it.key):(header?('h'+(++h)):('i'+(++n)));
+    return { key, label, header };
   }).filter(it=>it.label) : [];
   return {
     code: String(b.code||'').trim(),
@@ -446,7 +519,7 @@ function validateChecklistComplete(def, sub){
   if(!String(sub.date||'').trim()) miss.push('Date');
   if(!String(sub.completedByName||sub.completedBy||'').trim()) miss.push('Completed by');
   const answered=new Set((sub.responses||[]).filter(r=>String(r.status||'').trim()).map(r=>r.itemKey));
-  const unanswered=(def.items||[]).filter(it=>!answered.has(it.key));
+  const unanswered=(def.items||[]).filter(it=>!it.header && !answered.has(it.key));
   if(unanswered.length) miss.push(unanswered.length+' unanswered item(s)');
   return miss;
 }

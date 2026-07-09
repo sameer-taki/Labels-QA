@@ -445,6 +445,9 @@ async function main() {
     eq('GET /api/checklist-defs -> 200', r.status, 200);
     const hyg = (r.body || []).find(d => d.code === 'F-012-G');
     ok('F-012-G hygiene checklist seeded with items', !!(hyg && (hyg.items || []).length >= 15), hyg ? ('items=' + (hyg.items || []).length) : 'missing');
+    const gmp = (r.body || []).find(d => d.code === 'F-013B');
+    ok('F-013B GMP checklist populated with sections + items', !!(gmp && (gmp.items || []).filter(i => i.header).length === 6 && (gmp.items || []).filter(i => !i.header).length >= 55),
+      gmp ? ('sections=' + (gmp.items || []).filter(i => i.header).length + ' items=' + (gmp.items || []).filter(i => !i.header).length) : 'missing');
     const resp = (hyg.items || []).map(it => ({ itemKey: it.key, status: 'Yes' }));
     r = await request('POST', '/api/checklists', { defKey: hyg.id, date: '2026-07-09', completedByName: 'Admin', responses: resp, status: 'Completed' }, adminToken);
     eq('POST /api/checklists (completed) -> 200', r.status, 200);

@@ -85,10 +85,11 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   **effectiveness verification**.
 - **NCR** — non-conformance reports: disposition (use-as-is / rework / reject / return / scrap),
   severity, status; **promote an NCR to a linked CAPA** in one click.
-- **Checklists** — standalone daily/periodic checklists (Pre-Operational Hygiene **F-012-G**, GMP
-  **F-013B**, and any others). Each submission is a dated record with **two-person sign-off**
-  (Completed by → **Verified by** a different Supervisor+). Items are **admin-editable** in
-  Settings → Checklist forms. Print a completed checklist as its SQF record.
+- **Checklists** — standalone daily/periodic checklists (Pre-Operational Hygiene **F-012-G** daily;
+  GMP **F-013B** monthly, 6 sections / 59 items; and any others). Each submission is a dated record
+  with **two-person sign-off** (Completed by → **Verified by** a different Supervisor+). Items and
+  sections are **admin-editable** in Settings → Checklist forms (a `## Section` line starts a
+  section). Print a completed checklist as its SQF record.
 - **Equipment** — equipment & calibration register (machines, anilox, gauges, verifiers, scales):
   calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired). "Record
   calibration" captures the **F-009 Calibration Recording Form** — reference-vs-machine-output

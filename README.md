@@ -63,10 +63,10 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 - **F-009 Calibration Recording Form** — recorded against each item in the **Equipment & Calibration**
   register: reference-vs-machine-output readings, pass/fail, sticker, next-due and out-of-service.
   The full **calibration history is extractable at any time** (per-item view, CSV, and an Excel sheet).
-- **F-012-G Pre-Operational Hygiene Checklist** and **F-013B GMP Checklist** — daily standalone
-  **Checklists** with two-person sign-off (Completed by → Verified by). Checklist items are
-  **admin-editable** (Settings → Checklist forms); F-013B ships with its items blank until the source
-  form is loaded.
+- **F-012-G Pre-Operational Hygiene Checklist** (daily, 17 items) and **F-013B GMP Checklist**
+  (monthly, 6 sections / 59 items) — standalone **Checklists** with two-person sign-off (Completed by
+  → Verified by). Both ship fully populated; items and sections are **admin-editable** (Settings →
+  Checklist forms — a `## Section` line starts a new section).
 
 ### Amendments History
 

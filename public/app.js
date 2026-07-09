@@ -851,9 +851,14 @@ function chkPick(){
   const id=val("chk_def"); const def=(window._chkDefs||[]).find(d=>d.id===id); const host=$("#chkform"); if(!host)return;
   if(!def){ host.innerHTML=""; return; }
   if(!def.items||!def.items.length){ host.innerHTML=`<div class="banner warn" style="margin-top:12px">This checklist has no items yet. An administrator can add them in <b>Settings → Checklist forms</b>.</div>`; return; }
-  window._chkResp=def.items.map(it=>({itemKey:it.key,status:'',correctiveAction:''}));
+  // Responses keyed by item key (headers are skipped) so section rows don't shift indexes.
+  window._chkResp={}; def.items.forEach(it=>{ if(!it.header) window._chkResp[it.key]={itemKey:it.key,status:'',correctiveAction:''}; });
   const opts=chkRespOpts(def);
-  const rows=def.items.map((it,i)=>`<tr><td style="max-width:520px">${esc(it.label)}</td><td><select onchange="window._chkResp[${i}].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp[${i}].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}</tr>`).join("");
+  const cols=def.hasCorrectiveAction?3:2;
+  const rows=def.items.map(it=>{
+    if(it.header) return `<tr><td colspan="${cols}" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
+    return `<tr><td style="max-width:520px">${esc(it.label)}</td><td><select onchange="window._chkResp['${jsq(it.key)}'].status=this.value">${opts.map(o=>`<option value="${esc(o)}">${o?esc(o):'—'}</option>`).join("")}</select></td>${def.hasCorrectiveAction?`<td><input oninput="window._chkResp['${jsq(it.key)}'].correctiveAction=this.value" placeholder="Corrective action / comment"></td>`:''}</tr>`;
+  }).join("");
   host.innerHTML=`<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
     <div class="grid g3">
       <div class="field"><label>Date</label><input id="chk_date" type="date" value="${esc(new Date().toISOString().slice(0,10))}"></div>
@@ -868,15 +873,22 @@ function chkPick(){
 }
 async function chkSave(complete){
   const defId=val("chk_def"); if(!defId){ toast("Pick a checklist"); return; }
-  const body={ defKey:defId, date:val("chk_date"), shift:val("chk_shift").trim(), completedByName:val("chk_by").trim(), comments:val("chk_comments"), responses:window._chkResp||[], status:complete?'Completed':'Draft' };
+  const body={ defKey:defId, date:val("chk_date"), shift:val("chk_shift").trim(), completedByName:val("chk_by").trim(), comments:val("chk_comments"), responses:Object.values(window._chkResp||{}), status:complete?'Completed':'Draft' };
   try{ await api("/api/checklists",{method:"POST",body,queueable:true,optimistic:{}}); toast(complete?"Checklist completed":"Draft saved"); checklistsPage(); }catch(e){ toast(e.message); }
 }
 async function chkVerify(id){ if(!confirm("Verify this checklist? You confirm the checks were done correctly.")) return; try{ await api("/api/checklists/"+encodeURIComponent(id)+"/verify",{method:"POST",body:{}}); toast("Checklist verified"); checklistsPage(); }catch(e){ toast(e.message); } }
 async function chkView(id){
   let s; try{ s=await api("/api/checklists/"+encodeURIComponent(id)); }catch(e){ toast(e.message); return; }
-  const def=(window._chkDefs||[]).find(d=>d.id===s.defKey)||{items:[]};
-  const labelOf=k=>{ const it=(def.items||[]).find(x=>x.key===k); return it?it.label:k; };
-  const rows=(s.responses||[]).map(r=>`<tr><td style="max-width:520px">${esc(labelOf(r.itemKey))}</td><td>${chkStatusPill(r.status)}</td><td>${esc(r.correctiveAction||'')}</td></tr>`).join("");
+  let def=(window._chkDefs||[]).find(d=>d.id===s.defKey);
+  if(!def){ try{ def=(await api("/api/checklist-defs")).find(d=>d.id===s.defKey); }catch(e){} }
+  def=def||{items:[]};
+  const respOf={}; (s.responses||[]).forEach(r=>{ respOf[r.itemKey]=r; });
+  // Render in the definition's order, showing section headers; fall back to stored responses if the def is gone.
+  const src=(def.items&&def.items.length)?def.items:(s.responses||[]).map(r=>({key:r.itemKey,label:r.itemKey}));
+  const rows=src.map(it=>{
+    if(it.header) return `<tr><td colspan="3" style="background:var(--panel-2,#eef2f5);font-weight:700">${esc(it.label)}</td></tr>`;
+    const r=respOf[it.key]||{}; return `<tr><td style="max-width:520px">${esc(it.label)}</td><td>${chkStatusPill(r.status)}</td><td>${esc(r.correctiveAction||'')}</td></tr>`;
+  }).join("");
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:820px"><h2>${esc(s.code)} — ${esc(s.title)}</h2>
     <p class="sub">${esc(s.date)}${s.shift?' · '+esc(s.shift):''} · Completed by ${esc(s.completedByName||s.completedBy||'')}${s.verifiedByName?' · Verified by '+esc(s.verifiedByName):''}</p>
     <div style="overflow-x:auto"><table><thead><tr><th>Item</th><th>Status</th><th>Corrective action / comment</th></tr></thead><tbody>${rows}</tbody></table></div>
