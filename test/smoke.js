@@ -6,12 +6,14 @@
  */
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');           // repo working dir
-const DB_FILE = path.join(ROOT, 'data', 'db.json');
-const SNAP_FILE = path.join(ROOT, 'data', 'db.json.smokebak');
+// Run against an isolated throwaway data dir so the test never reads or mutates
+// the real data/ folder (incl. its .bak fallback) and can't be cross-contaminated.
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gqa-smoke-'));
 const PORT = 34567;
 const HOST = '127.0.0.1';
 const PID = process.pid;
@@ -66,35 +68,16 @@ async function waitForReady() {
   return false;
 }
 
-/* ---------- db snapshot / restore ---------- */
-let hadDB = false;
-function snapshotDB() {
-  hadDB = fs.existsSync(DB_FILE);
-  if (hadDB) fs.copyFileSync(DB_FILE, SNAP_FILE);
-}
-function restoreDB() {
-  try {
-    if (hadDB) {
-      if (fs.existsSync(SNAP_FILE)) {
-        fs.copyFileSync(SNAP_FILE, DB_FILE);
-        fs.unlinkSync(SNAP_FILE);
-      }
-    } else {
-      // DB was absent before the run; the server may have created it - remove it.
-      if (fs.existsSync(DB_FILE)) fs.unlinkSync(DB_FILE);
-    }
-  } catch (e) {
-    console.error('WARN: could not restore data/db.json:', e && e.message);
-  }
+/* ---------- isolated data dir cleanup ---------- */
+function cleanupDataDir() {
+  try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (e) {}
 }
 
 /* ---------- main ---------- */
 async function main() {
-  snapshotDB();
-
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(PORT) }),
+    env: Object.assign({}, process.env, { PORT: String(PORT), GQA_DATA_DIR: DATA_DIR }),
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let childExited = false, childExitInfo = '';
@@ -465,6 +448,51 @@ async function main() {
     r = await request('POST', '/api/checklist-defs', { code: 'X', title: 'Nope' }, officerToken);
     eq('create checklist-def by non-manager -> 403', r.status, 403);
 
+    // 30b. Checklist photos — only server-issued /uploads/ URLs are accepted (drops foreign/traversal URLs)
+    const photoResp = (hyg.items || []).slice(0, 2).map((it, i) => ({ itemKey: it.key, status: 'Yes', photos: i === 0 ? ['/uploads/item-shot.jpg', 'http://evil.example/x.jpg'] : [] }));
+    r = await request('POST', '/api/checklists', { defKey: hyg.id, date: '2026-07-08', completedByName: 'Admin', status: 'Draft', responses: photoResp, photos: ['/uploads/floor-a.jpg', '/uploads/floor-b.jpg', 'https://evil.example/steal.jpg', '/uploads/../../etc/passwd'] }, adminToken);
+    eq('POST checklist with photos (draft) -> 200', r.status, 200);
+    const photoChk = r.body || {};
+    ok('submission-level photos filtered to valid /uploads/ URLs only', Array.isArray(photoChk.photos) && photoChk.photos.length === 2 && photoChk.photos.every(u => /^\/uploads\/[\w.\-]+$/.test(u)), JSON.stringify(photoChk.photos));
+    const itemWithPhoto = (photoChk.responses || []).find(x => (x.photos || []).length);
+    ok('per-item photo kept and foreign URL dropped', !!(itemWithPhoto && itemWithPhoto.photos.length === 1 && itemWithPhoto.photos[0] === '/uploads/item-shot.jpg'), JSON.stringify(itemWithPhoto && itemWithPhoto.photos));
+
+    // 30c. Due-tracking — GET /api/checklists/due reflects frequency + status; completing today marks it done
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    eq('GET /api/checklists/due -> 200', r.status, 200);
+    const due = r.body || [];
+    ok('due list is an array with a status per active form', Array.isArray(due) && due.length >= 2 && due.every(d => typeof d.status === 'string' && d.code), JSON.stringify(due).slice(0, 200));
+    const hygDue = due.find(d => d.code === 'F-012-G');
+    ok('F-012-G reports as a daily check', !!(hygDue && hygDue.frequency === 'daily'), JSON.stringify(hygDue));
+    const gmpDue = due.find(d => d.code === 'F-013B');
+    ok('F-013B reports as a monthly check', !!(gmpDue && gmpDue.frequency === 'monthly'), JSON.stringify(gmpDue));
+    // Complete today's hygiene check (omit date so the server stamps its own plant-local today),
+    // then it should read back as done for today. This also exercises the instant-email path.
+    const respToday = (hyg.items || []).map(it => ({ itemKey: it.key, status: 'Yes' }));
+    r = await request('POST', '/api/checklists', { defKey: hyg.id, completedByName: 'Admin', responses: respToday, status: 'Completed' }, adminToken);
+    eq('complete today\'s hygiene check -> 200 (email path exercised, no error)', r.status, 200);
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    const hygDue2 = (r.body || []).find(d => d.code === 'F-012-G');
+    ok('F-012-G marked done after today\'s completion', !!(hygDue2 && hygDue2.status === 'done'), JSON.stringify(hygDue2));
+    r = await request('GET', '/api/checklists/due');
+    eq('due list requires auth -> 401', r.status, 401);
+
+    // 30d. Non-daily/non-monthly cadences must NOT be treated as daily (no false "overdue" reminder spam)
+    r = await request('POST', '/api/checklist-defs', { code: 'F-WK1', title: 'Weekly line audit', frequency: 'weekly', items: [{ label: 'Line clean' }] }, adminToken);
+    eq('create weekly checklist-def -> 200', r.status, 200);
+    const wkId = r.body && r.body.id;
+    r = await request('POST', '/api/checklist-defs', { code: 'F-AH1', title: 'Ad-hoc incident check', frequency: 'ad-hoc', items: [{ label: 'Area safe' }] }, adminToken);
+    eq('create ad-hoc checklist-def -> 200', r.status, 200);
+    const ahId = r.body && r.body.id;
+    r = await request('GET', '/api/checklists/due', undefined, adminToken);
+    const wkDue = (r.body || []).find(d => d.code === 'F-WK1');
+    ok('weekly form reports frequency=weekly (not daily) and is never overdue', !!(wkDue && wkDue.frequency === 'weekly' && wkDue.status !== 'overdue'), JSON.stringify(wkDue));
+    const ahDue = (r.body || []).find(d => d.code === 'F-AH1');
+    ok('ad-hoc form is scheduled-only (never due/overdue → no reminder spam)', !!(ahDue && ahDue.frequency === 'ad-hoc' && ahDue.status === 'scheduled'), JSON.stringify(ahDue));
+    // clean up the throwaway defs so later assertions/counts are unaffected
+    if (wkId) await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(wkId), undefined, adminToken);
+    if (ahId) await request('DELETE', '/api/checklist-defs/' + encodeURIComponent(ahId), undefined, adminToken);
+
     // 31. Calibration recording form + extractable history
     r = await request('GET', '/api/equipment', undefined, adminToken);
     const eq0 = (r.body || [])[0];
@@ -509,7 +537,7 @@ async function main() {
         if (!childExited) child.kill('SIGKILL');
       }
     } catch (e) { /* ignore */ }
-    restoreDB();
+    cleanupDataDir();
   }
 
   console.log('');
@@ -520,7 +548,7 @@ main()
   .then(() => { process.exit(failed > 0 ? 1 : 0); })
   .catch((e) => {
     console.error('Fatal:', e && e.stack ? e.stack : e);
-    // best-effort restore even on fatal path
-    try { restoreDB(); } catch (x) { /* ignore */ }
+    // best-effort cleanup even on fatal path
+    try { cleanupDataDir(); } catch (x) { /* ignore */ }
     process.exit(1);
   });

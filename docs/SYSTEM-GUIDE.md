@@ -90,6 +90,16 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   with **two-person sign-off** (Completed by → **Verified by** a different Supervisor+). Items and
   sections are **admin-editable** in Settings → Checklist forms (a `## Section` line starts a
   section). Print a completed checklist as its SQF record.
+  - **Photos** per submission and per line item (server-issued `/uploads/` URLs only; capped at 30 per
+    submission, 8 per item).
+  - **Instant e-mail** to Quality Manager + Supervisors + Administrators (deduped, plus configured
+    digest recipients) on complete/verify, mirrored to Teams — fire-and-forget, no-ops when SMTP is
+    disabled. Emits a `checklist.completed` webhook.
+  - **Due-tracking** — `GET /api/checklists/due` returns per-form status (`done`/`due`/`overdue` for
+    daily before the per-form `dueByHour` cut-off, default noon; `done`/`due`/`scheduled` for monthly,
+    "due" in the final week). "Today" is resolved in the plant timezone (`APP_TZ`, default
+    `Pacific/Fiji`). An hourly `checkChecklistReminders` job e-mails outstanding items (deduped per
+    form+period).
 - **Equipment** — equipment & calibration register (machines, anilox, gauges, verifiers, scales):
   calibration interval, **status auto-computed** (OK / Due soon / Overdue / Retired). "Record
   calibration" captures the **F-009 Calibration Recording Form** — reference-vs-machine-output
@@ -155,8 +165,8 @@ The database is one JSON document with these collections:
 | `capas` | id, jobNo, title, severity, status, root cause, actions, owner, dueDate, effectiveness, escalation |
 | `ncrs` | id, jobNo, description, disposition, severity, status, `capaId` link |
 | `equipment` | id, name, type, model, serial, machine, calibratedOn, intervalDays, nextDueOverride, `history[]` = {on, technician, result, readings[], sticker, nextDue, outOfService, comments} (status computed) |
-| `checklistDefs` | id, code, title, frequency, responseType, `items[]` {key,label}, requireVerify (admin-editable form templates) |
-| `checklists` | id, defKey, code, date, shift, `responses[]` {itemKey,status,correctiveAction}, completedBy, **verifiedBy/verifiedAt**, status (Draft/Completed/Verified) |
+| `checklistDefs` | id, code, title, frequency, responseType, `dueByHour` (daily cut-off, default 12), `items[]` {key,label,header}, requireVerify (admin-editable form templates) |
+| `checklists` | id, defKey, code, date, shift, `responses[]` {itemKey,status,correctiveAction,`photos[]`}, `photos[]`, completedBy, **verifiedBy/verifiedAt**, status (Draft/Completed/Verified) |
 | `apikeys` | id, name, prefix, **keyHash** (sha256), scopes, active |
 | `webhooks` | id, url, events[], secret, lastStatus |
 | `masterdata` | machines, defectTypes, products, tolerances, KPI targets, competencyEnforced |
@@ -247,6 +257,7 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET /api/equipment/:id/history` · `GET /api/equipment/calibration-history.csv` | Calibration history + CSV extract | authed |
 | `GET /api/checklist-defs` · `POST/PUT/DELETE /api/checklist-defs[/:id]` | Checklist form templates | view: authed · write: Supervisor |
 | `GET/POST /api/checklists[/:id]` · `PUT /api/checklists/:id` · `POST /api/checklists/:id/verify` | Checklist submissions · verify (2nd person) | authed · verify: Supervisor |
+| `GET /api/checklists/due` | Per-form due status (daily before-noon / monthly month-end) | authed |
 | `GET /api/analytics` · `GET /api/spc` · `GET /api/suppliers` | Analytics / SPC / suppliers | authed |
 | `GET /api/exec` | Executive RAG summary | Supervisor |
 | `GET /api/audit[?recordId=&jobNo=&recordType=&from=&to=]` · `GET /api/audit/export.csv` · `GET /api/audit/verify` | Amendments History (field-level) · CSV export · integrity check | Supervisor |
