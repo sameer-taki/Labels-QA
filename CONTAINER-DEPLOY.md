@@ -113,8 +113,16 @@ In Portainer: **Stacks → Add stack → Repository**.
 2. **Repository URL:** this repo's URL. Add credentials (token / SSH key) if private.
 3. **Reference:** `refs/heads/main`.
 4. **Compose path:** `docker-compose.traefik.yml`.
-5. **Enable GitOps updates (automatic polling):** interval **5m**. Portainer re-pulls
+5. **Enable GitOps updates (automatic polling):** interval **5m**. Portainer re-checks
    `refs/heads/main` every 5 minutes and redeploys when the commit changes.
+   - **Force redeployment: ON** — rebuilds the image from source on each new commit.
+   - **Re-pull image: OFF** ⚠️ — the app image (`goldenqa:latest`) is **built from the
+     Dockerfile**, not pulled from a registry. With re-pull ON, Portainer tries to
+     `docker pull goldenqa:latest` from Docker Hub, fails with *"pull access denied for
+     goldenqa, repository does not exist"*, marks the deploy failed, and **reschedules it
+     every minute — an endless rebuild/recreate loop.** (`pull_policy: build` in the compose
+     file guards against this too, but leave the toggle OFF.) Re-pull only makes sense for
+     stacks that pull pre-built images from a registry.
 6. **Environment variables** — set these in the stack's env section:
 
    | Variable | Required | Notes |
@@ -240,8 +248,20 @@ docker logs <stack>-db-backup-1         # backup sidecar (last run)
 ```
 
 **Manual redeploy / pull latest** — in Portainer: the stack's **Pull and redeploy**
-(or **Update the stack**, with *re-pull image* if the base image changed). GitOps
-polling (§3) also does this automatically every 5m.
+(rebuilds the app image from the current `main`). GitOps polling (§3) also does this
+automatically every 5m. Leave **Re-pull image OFF** (see §3) — the app image is built,
+not pulled; only `db`/`db-backup` come from a registry and those refresh on redeploy.
+
+**Rotating the Git access token** (private repo) — Portainer authenticates to GitHub with
+a token to read this repo. Tokens expire; when one does, GitOps silently stops advancing
+(see the troubleshooting table below). To rotate:
+1. Create a new token on GitHub — a **fine-grained PAT** scoped to this repo with
+   **Contents: Read** (Metadata auto-added), or a **classic PAT** with the **`repo`** scope.
+2. In Portainer, open the stack's **Git** settings (or **Settings → Shared credentials** if
+   you use a shared entry) and re-enter the username + new token. Editing a git stack can
+   blank the token field — make sure it's filled before saving.
+3. **Save**, then **Pull and redeploy**. The stack jumps to the latest `main`.
+4. Set a calendar reminder ahead of the new token's expiry (fine-grained PATs last ≤ 366 days).
 
 **Rollback to a previous commit** — in Portainer, change the stack's **Reference** to
 a specific commit (`<sha>`) or a tag instead of `refs/heads/main`, then update; or
@@ -265,6 +285,27 @@ docker volume inspect goldenqa_pgdata goldenqa_uploads goldenqa_backups
 ```bash
 docker restart <stack>-app-1
 ```
+
+**Self-healing** — the app image ships a `HEALTHCHECK` (readiness probe), and the stack
+runs a small `autoheal` sidecar that **restarts the app automatically if it goes
+unhealthy** (e.g. loses the DB). Confirm it's up: `docker ps --filter name=autoheal`.
+
+### Troubleshooting deploys
+
+| Symptom (Portainer log / behaviour) | Cause | Fix |
+|---|---|---|
+| `Unable to retrieve stack file: Could not get the contents of the file 'docker-compose.traefik.yml'`; stack stuck at an old commit while `main` moved on | Git credential **expired, revoked, or dropped** — Portainer can't read the private repo (the file exists; auth failed) | **Rotate the Git token** (§7 above), then Pull & redeploy. Confirm from the host: `git ls-remote https://<token>@github.com/<owner>/<repo> main`. |
+| `pull access denied for goldenqa, repository does not exist or may require 'docker login'`; containers **rebuild/recreate every minute** | **"Re-pull image" is ON** for this build-based stack — Portainer tries to pull the locally-built `goldenqa:latest` from Docker Hub | Turn **"Re-pull image" OFF** on the stack (§3). `pull_policy: build` in the compose also guards this. |
+| App container `unhealthy` or restart-looping | Postgres unreachable, wrong `DB_PASSWORD` (must match the `goldenqa_pgdata` volume — §4), or missing/weak `SECRET_KEY` (≥16 alphanumeric) | Check `docker logs <stack>-app-1` and `curl http://localhost:3000/api/health/ready` (from inside the network); fix env; the `autoheal` sidecar restarts it once healthy. |
+| New commit merged to `main` but features don't appear | GitOps poll not yet fired (up to 5m), or the deploy is failing on one of the rows above | Wait one poll or hit **Pull and redeploy**; if it fails, check the log against this table. |
+| Image build fails fetching `docker/dockerfile` frontend | (Legacy) BuildKit syntax directive on an offline/rate-limited host | Already removed from the Dockerfile — pull latest `main`. |
+
+> Two apps, one host: this stack builds `goldenqa:latest`. If another app on the **same
+> Docker host** also builds an image with that exact tag, they overwrite each other and a
+> reboot can start the wrong app. Give each app a **distinct image tag** if they share a host.
+
+More deployment FAQs (features not showing, egress checks) live in
+[`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md) §G.
 
 ---
 

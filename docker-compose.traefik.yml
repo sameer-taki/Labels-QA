@@ -62,6 +62,9 @@ services:
       - "traefik.http.routers.goldenqa.service=goldenqa"
       # The app listens on 3000 inside the container.
       - "traefik.http.services.goldenqa.loadbalancer.server.port=3000"
+      # Let the autoheal sidecar restart this container if the image HEALTHCHECK
+      # (see Dockerfile — probes /api/health/ready) reports it unhealthy.
+      - "autoheal=true"
 
   db:
     image: postgres:16-alpine
@@ -102,6 +105,23 @@ services:
       TZ: ${TZ:-Pacific/Fiji}
     volumes:
       - goldenqa_backups:/backups
+    networks:
+      - default
+
+  # Watches for containers labelled autoheal=true and restarts them when Docker
+  # reports them unhealthy (the app image ships a HEALTHCHECK). Needs the Docker
+  # socket to issue restarts — this grants it Docker control, same as the plant's
+  # other stacks. No host port, internal network only.
+  autoheal:
+    image: willfarrell/autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15        # seconds between health polls
+      AUTOHEAL_START_PERIOD: 60    # grace after a container starts, before acting
+      TZ: ${TZ:-Pacific/Fiji}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - default
 
