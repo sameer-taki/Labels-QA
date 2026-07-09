@@ -43,6 +43,18 @@ services:
       LDAP_BASE_DN: ${LDAP_BASE_DN:-}
       LDAP_BIND_DN: ${LDAP_BIND_DN:-}
       LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
+      # Manager e-mail (checklist alerts, hold/reject, digest). Set SMTP_HOST to turn it on;
+      # add SMTP_USER/SMTP_PASS only for an authenticated relay. NOTIFY_EMAIL_TO is a comma-
+      # separated fallback recipient list (managers/supervisors with an e-mail also get it).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      NOTIFY_EMAIL_TO: ${NOTIFY_EMAIL_TO:-}
+      # Optional Microsoft Teams incoming-webhook URL (mirrors the same alerts).
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
     volumes:
       # Uploaded photos/signatures - the only app-written persistent data in Postgres mode.
       - goldenqa_uploads:/app/data/uploads

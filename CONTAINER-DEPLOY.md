@@ -115,7 +115,12 @@ In Portainer: **Stacks → Add stack → Repository**.
 4. **Compose path:** `docker-compose.traefik.yml`.
 5. **Enable GitOps updates (automatic polling):** interval **5m**. Portainer re-checks
    `refs/heads/main` every 5 minutes and redeploys when the commit changes.
-   - **Force redeployment: ON** — rebuilds the image from source on each new commit.
+   - **Force redeployment: OFF** — "Force redeployment" makes Portainer redeploy on **every
+     poll interval regardless of whether `main` changed**, which for this build-based stack
+     means rebuilding and **recreating the app container every interval** (needless restarts).
+     With it OFF, GitOps still deploys automatically — it redeploys **when it detects a new
+     commit on `main`**, which is what you want. (Rebuilds pick up new code via `pull_policy:
+     build`; if a redeploy ever comes up on stale code, use **Pull and redeploy** once.)
    - **Re-pull image: OFF** ⚠️ — the app image (`goldenqa:latest`) is **built from the
      Dockerfile**, not pulled from a registry. With re-pull ON, Portainer tries to
      `docker pull goldenqa:latest` from Docker Hub, fails with *"pull access denied for
@@ -132,11 +137,25 @@ In Portainer: **Stacks → Add stack → Repository**.
    | `SECRET_KEY` | yes | Session-signing secret, ≥ 16 alphanumeric chars (from §2). |
    | `ADMIN_USERNAME` | optional | Seed admin login; defaults to `admin`. |
    | `ADMIN_PASSWORD` | yes (first run) | Seed admin password — used **only** to create the first admin on an empty DB. |
+   | `SMTP_HOST` | optional | **Turns manager e-mail ON.** SMTP relay host. Blank = e-mail off (no-op). |
+   | `SMTP_PORT` | optional | `587` (STARTTLS, default) or `465` (implicit TLS). |
+   | `SMTP_SECURE` | optional | `true` for implicit TLS (465); `false`/blank for STARTTLS (587). |
+   | `SMTP_USER` / `SMTP_PASS` | optional | Only for an **authenticated** relay; omit for an internal relay that accepts unauthenticated mail from the host. |
+   | `SMTP_FROM` | optional | From address, e.g. `golden-qa@golden.com.fj`. |
+   | `NOTIFY_EMAIL_TO` | optional | Comma-separated always-notify recipients (managers/supervisors), in addition to users who have an e-mail on their account. |
+   | `TEAMS_WEBHOOK_URL` | optional | Microsoft Teams incoming-webhook URL — mirrors the same alerts. |
 
    Non-secret runtime values are fixed in the compose file (`NODE_ENV=production`,
    `PORT=3000`, `HOST=0.0.0.0`, `BACKUP_DIR=/backups`); the app's other non-secret
    settings live in the committed `config.json`. **Do not** put secrets in
    `config.json` — they come only from env.
+
+   **Enable manager e-mail** (checklist alerts, hold/reject, digest): set at least
+   `SMTP_HOST` (+ `SMTP_FROM`). For an authenticated relay add `SMTP_USER`/`SMTP_PASS` and
+   the right `SMTP_PORT`/`SMTP_SECURE`. Add `NOTIFY_EMAIL_TO` so alerts reach managers even
+   before staff e-mails are filled in. After redeploy, send a test from **Reports → Email
+   digest to managers** (or trigger a checklist completion) and confirm delivery. Leaving
+   `SMTP_HOST` blank keeps e-mail disabled (the app just skips it).
 
 7. **Deploy the stack.** Portainer creates the containers, the named volumes
    (`goldenqa_pgdata`, `goldenqa_uploads`, `goldenqa_backups`), and attaches the app
