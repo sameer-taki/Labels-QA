@@ -32,6 +32,28 @@ if (PROD && SECRET_KEY.replace(/[^A-Za-z0-9]/g, '').length < 16) {
 const TOKEN_SECRET = SECRET_KEY || 'dev-insecure-secret-change-me';
 const TOKEN_TTL_MS = (Number(process.env.SESSION_HOURS) || 12) * 60 * 60 * 1000;
 
+/* E-mail (SMTP) + Teams: env overrides config.json so relay creds live in the Portainer
+   stack env, never in the repo. Setting SMTP_HOST turns manager e-mail on (unauthenticated
+   relay = host only; authenticated relay = also set SMTP_USER/SMTP_PASS). */
+CFG.notify = CFG.notify || {};
+(function applyNotifyEnv(){
+  const e = Object.assign({}, CFG.notify.email);
+  const env = process.env, bool = v => /^(1|true|yes|on)$/i.test(String(v));
+  if (env.SMTP_HOST) e.smtpHost = env.SMTP_HOST;
+  if (env.SMTP_PORT) e.smtpPort = Number(env.SMTP_PORT) || e.smtpPort;
+  if (env.SMTP_SECURE != null && env.SMTP_SECURE !== '') e.secure = bool(env.SMTP_SECURE);
+  if (env.SMTP_USER != null && env.SMTP_USER !== '') e.user = env.SMTP_USER;
+  if (env.SMTP_PASS != null && env.SMTP_PASS !== '') e.pass = env.SMTP_PASS;
+  if (env.SMTP_FROM) e.from = env.SMTP_FROM;
+  if (env.SMTP_REJECT_UNAUTHORIZED != null && env.SMTP_REJECT_UNAUTHORIZED !== '') e.rejectUnauthorized = bool(env.SMTP_REJECT_UNAUTHORIZED);
+  if (env.NOTIFY_EMAIL_TO) e.to = env.NOTIFY_EMAIL_TO.split(',').map(s => s.trim()).filter(Boolean);
+  // Enable when a host is configured (env or config.json), unless explicitly disabled.
+  if (env.SMTP_ENABLED != null && env.SMTP_ENABLED !== '') e.enabled = bool(env.SMTP_ENABLED);
+  else if (env.SMTP_HOST) e.enabled = true;
+  CFG.notify.email = e;
+})();
+if (process.env.TEAMS_WEBHOOK_URL) CFG.notify.teamsWebhookUrl = process.env.TEAMS_WEBHOOK_URL;
+
 /* ---------- persistence: Postgres (DATABASE_URL, production) | JSON file (dev/on-prem) ---------- */
 let DB = null;
 const STORAGE = makeStorage({

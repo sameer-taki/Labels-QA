@@ -855,12 +855,30 @@ async function checklistsPage(){
       <div class="field" style="max-width:520px;margin-top:8px"><label>New checklist</label><select id="chk_def" onchange="chkPick()"><option value="">— Select a checklist —</option>${opts}</select></div>
       <div id="chkform"></div>
     </div>
-    <div class="card"><h3 style="margin-top:0">Recent submissions</h3><div id="chklist"></div></div>`;
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <h3 style="margin:0">Recent submissions</h3>
+        <div class="no-print" style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="chkf_def" onchange="chkRenderList()" title="Filter by form"><option value="">All forms</option>${defs.map(d=>`<option value="${esc(d.id)}">${esc(d.code)}</option>`).join("")}</select>
+          <select id="chkf_status" onchange="chkRenderList()" title="Filter by status"><option value="">All statuses</option><option>Draft</option><option>Completed</option><option>Verified</option></select>
+          <input id="chkf_date" type="date" onchange="chkRenderList()" title="Filter by date" style="max-width:170px">
+          <button class="btn ghost sm" onclick="chkClearFilters()">Clear</button>
+        </div>
+      </div>
+      <div id="chklist"></div>
+    </div>`;
   chkRenderList();
 }
+function chkClearFilters(){ ["chkf_def","chkf_status","chkf_date"].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=""; }); chkRenderList(); }
 function chkRenderList(){
-  const subs=(window._chkSubs||[]); const host=$("#chklist"); if(!host)return;
-  if(!subs.length){ host.innerHTML=`<div class="empty">No checklists submitted yet.</div>`; return; }
+  const host=$("#chklist"); if(!host)return;
+  const all=(window._chkSubs||[]);
+  const fd=val("chkf_def"), fst=val("chkf_status"), fdt=val("chkf_date");
+  let subs=all.slice();
+  if(fd) subs=subs.filter(s=>s.defKey===fd);
+  if(fst) subs=subs.filter(s=>s.status===fst);
+  if(fdt) subs=subs.filter(s=>s.date===fdt);
+  if(!subs.length){ host.innerHTML=`<div class="empty">${all.length?'No checklists match these filters.':'No checklists submitted yet.'}</div>`; return; }
   const canMgr=isMgrRole();
   host.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Title</th><th>Date</th><th>Shift</th><th>Status</th><th>Completed by</th><th>Verified by</th><th class="no-print"></th></tr></thead><tbody>${subs.map(s=>{
     const bad=(s.responses||[]).filter(r=>r.status&&r.status!=='Yes').length;
