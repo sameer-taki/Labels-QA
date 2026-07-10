@@ -74,12 +74,16 @@ const ICONS = {
   checklist:"M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"
 };
 function ic(n){ return `<svg class="nav-ic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[n]||''}"/></svg>`; }
+/* The QA flow. Stage 2 (Reel Inspection / F-021) is the operator's record and was removed from
+   this flow; storage keys keep their historical numbers (stage1/stage3/stage4) so existing job
+   records, audit history and offline-queued saves stay valid. `no` is the DISPLAYED position. */
 const STAGES = [
-  {key:"stage1",no:1,name:"Printing",form:"F-040-A / F-016-E / F-027-A"},
-  {key:"stage2",no:2,name:"Reel Inspection",form:"F-021"},
-  {key:"stage3",no:3,name:"Sheeting / Slitting",form:"PRD002"},
-  {key:"stage4",no:4,name:"Finishing & Release",form:"F-038-A"}
-];
+  {key:"stage1",name:"Printing",form:"F-040-A / F-016-E / F-027-A"},
+  {key:"stage3",name:"Sheeting / Slitting",form:"PRD002"},
+  {key:"stage4",name:"Finishing & Release",form:"F-038-A"}
+].map((s,i)=>Object.assign(s,{no:i+1}));
+const FLOW = STAGES.map(s=>Number(s.key.slice(5)));      // storage stage numbers, in order
+const stageName = k => { const s=STAGES.find(x=>x.key===k); return s?s.name:k; };
 
 let TOKEN = localStorage.getItem("gqa_token") || null;
 let ME = null, MD = null;
@@ -233,7 +237,7 @@ async function dashboard(){
       <div class="stat"><div class="n">${cnt('Released')}</div><div class="l">Released</div></div>
       <div class="stat"><div class="n">${cnt('Hold')+cnt('Rejected')}</div><div class="l">Hold / Reject</div></div>
     </div>
-    <div class="card"><h2>Active &amp; Recent Jobs</h2><p class="sub">Each Starkist job tracked through all four stages by one Job #.</p>
+    <div class="card"><h2>Active &amp; Recent Jobs</h2><p class="sub">Each Starkist job tracked through all three stages by one Job #.</p>
     <div class="grid g4 no-print" style="margin-bottom:14px">
       <div class="field"><label>Search</label><input id="dq" placeholder="Job #, product, customer" oninput="renderJobRows()"></div>
       <div class="field"><label>Status</label><select id="dstatus" onchange="renderJobRows()"><option value="">All statuses</option><option>New</option><option>In Progress</option><option>Released</option><option>Hold</option><option>Rejected</option></select></div>
@@ -245,10 +249,11 @@ async function dashboard(){
   if(jobs.length) renderJobRows();
 }
 function jobRow(j){
-  const segs=[1,2,3,4].map((n,i)=>`<div class="seg ${j.completed>=n?'done':(i===j.completed?'cur':'')}"></div>`).join("");
+  const comp=Math.min(j.completed||0, STAGES.length); // stale caches may still report the old 4-stage count
+  const segs=STAGES.map((s,i)=>`<div class="seg ${comp>=i+1?'done':(i===comp?'cur':'')}"></div>`).join("");
   return `<tr><td><b>${esc(j.jobNo)}</b></td><td>${esc(j.product||"")}<div style="font-size:12px;color:var(--muted)">${esc(j.customer||"")}</div></td>
     <td><span class="tag-machine">${esc(mlabel(j.machine))}</span></td>
-    <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${j.completed} of 4</div></td>
+    <td style="min-width:150px"><div class="progress">${segs}</div><div style="font-size:12px;color:var(--muted)">${comp} of ${STAGES.length}</div></td>
     <td>${statusPill(j.status)}</td><td><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Open</button></td></tr>`;
 }
 function renderJobRows(){
@@ -321,23 +326,24 @@ async function entry(){
   if(!CUR.jobNo){ const jobs=await api("/api/jobs");
     app().innerHTML=`<div class="card"><h2>Data Entry</h2><p class="sub">Choose a job.</p>${jobs.length?`<div class="field" style="max-width:460px"><label>Select Job #</label><select onchange="if(this.value)go('entry',{jobNo:this.value})"><option value="">— Select —</option>${jobs.map(j=>`<option value="${esc(j.jobNo)}">${esc(j.jobNo)} — ${esc(j.product||'')}</option>`).join("")}</select></div>`:`<div class="empty">No jobs. <button class="btn gold" onclick="go('new')">+ New Job</button></div>`}</div>`; return; }
   JOB=await api("/api/jobs/"+encodeURIComponent(CUR.jobNo));
-  const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=[1,2,3,4].filter(done).length;
-  const bar=STAGES.map(s=>`<button class="${CUR.stage===s.key?'active':''}" onclick="go('entry',{jobNo:'${jsq(JOB.jobNo)}',stage:'${s.key}'})"><div class="s-no">Stage ${s.no} · ${esc(s.form)}</div><div class="s-nm">${esc(s.name)}</div><div class="s-st">${done(s.no)?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div></button>`).join("");
+  if(!STAGES.some(s=>s.key===CUR.stage)) CUR.stage="stage1"; // e.g. stale nav to the removed stage2
+  const done=n=>JOB["stage"+n]&&JOB["stage"+n]._done; const c=FLOW.filter(done).length;
+  const bar=STAGES.map(s=>`<button class="${CUR.stage===s.key?'active':''}" onclick="go('entry',{jobNo:'${jsq(JOB.jobNo)}',stage:'${s.key}'})"><div class="s-no">Stage ${s.no} · ${esc(s.form)}</div><div class="s-nm">${esc(s.name)}</div><div class="s-st">${JOB[s.key]&&JOB[s.key]._done?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div></button>`).join("");
   const canHold=["Supervisor","Quality Manager","Administrator"].includes(ME.role);
   const canDelete=["Quality Manager","Administrator"].includes(ME.role);
   app().innerHTML=`<div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<4?'In Progress':'Released')))}</h2>
+      <div><h2 style="margin:0">Job ${esc(JOB.jobNo)} ${statusPill(JOB.statusOverride|| (c===0?'New':(c<FLOW.length?'In Progress':'Released')))}</h2>
       <p class="sub" style="margin:4px 0 0">${esc(JOB.product||'—')} · <span class="tag-machine">${esc(mlabel(JOB.machine))}</span> · ${esc(JOB.customer||'')}${JOB.templateApplied?` · <span title="Stage 1 pre-filled from this template">Template: ${esc(JOB.templateApplied)}</span>`:''}</p></div>
       <div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('lookup',{jobNo:'${jsq(JOB.jobNo)}'})">Summary</button> ${canHold?`<button class="btn ghost sm" onclick="editJobModal()">Edit details</button>`:''} <button class="btn ghost sm" onclick="cloneJobModal()">Clone</button> ${canHold?`<button class="btn ghost sm" onclick="raiseCapaFor('${jsq(JOB.jobNo)}')">Raise CAPA</button>`:''} ${canHold&&JOB.statusOverride?`<button class="btn ghost sm" onclick="releaseJob('${jsq(JOB.jobNo)}')">Clear hold</button>`:''} ${canHold?`<button class="btn danger sm" onclick="holdJob('${jsq(JOB.jobNo)}')">Hold</button>`:''} ${canDelete?`<button class="btn danger sm" onclick="deleteJob('${jsq(JOB.jobNo)}')">Delete</button>`:''}</div>
     </div>
-    <div class="banner">Progress: ${c} of 4 stages complete. Complete in sequence.</div>
+    <div class="banner">Progress: ${c} of ${STAGES.length} stages complete. Complete in sequence.</div>
     <div class="stagebar">${bar}</div><div id="stageform"></div></div>`;
   stageForm(CUR.stage);
 }
 async function holdJob(no){ const reason=prompt("Reason for placing on hold?"); if(reason===null)return; await api("/api/jobs/"+encodeURIComponent(no)+"/hold",{method:"POST",body:{reason}}); toast("Job on hold"); entry(); }
-async function releaseJob(no){ if(!confirm("Clear the hold on "+no+"? It returns to its automatic status (Released once all 4 stages are complete).")) return; try{ await api("/api/jobs/"+encodeURIComponent(no)+"/release",{method:"POST",body:{}}); toast("Hold cleared"); entry(); }catch(e){ toast(e.message); } }
-function editJobModal(){ const machines=MD.machines||{}; const canMachine=[1,2,3,4].every(n=>!(JOB["stage"+n]&&JOB["stage"+n]._done));
+async function releaseJob(no){ if(!confirm("Clear the hold on "+no+"? It returns to its automatic status (Released once all "+STAGES.length+" stages are complete).")) return; try{ await api("/api/jobs/"+encodeURIComponent(no)+"/release",{method:"POST",body:{}}); toast("Hold cleared"); entry(); }catch(e){ toast(e.message); } }
+function editJobModal(){ const machines=MD.machines||{}; const canMachine=FLOW.every(n=>!(JOB["stage"+n]&&JOB["stage"+n]._done));
   $("#modalRoot").innerHTML=`<div class="modal-bg"><div class="modal"><h2>Edit ${esc(JOB.jobNo)}</h2>
     <div class="field"><label>Customer</label><input id="ej_customer" value="${esc(JOB.customer||'')}"></div>
     <div class="field"><label>Product / Item</label><input id="ej_product" value="${esc(JOB.product||'')}"></div>
@@ -365,7 +371,7 @@ function fS(id,l,v,opts){ return `<div class="field"><label>${l}</label><select 
 function val(id){ const e=document.getElementById(id); return e?e.value:""; }
 
 function stageForm(key){ const d=JOB[key]||{}; const h=$("#stageform");
-  if(key==="stage1")h.innerHTML=s1(d); if(key==="stage2")h.innerHTML=s2(d); if(key==="stage3")h.innerHTML=s3(d); if(key==="stage4")h.innerHTML=s4(d);
+  if(key==="stage1")h.innerHTML=s1(d); if(key==="stage3")h.innerHTML=s3(d); if(key==="stage4")h.innerHTML=s4(d);
   if(key==="stage1")setTimeout(s1flags,0); if(key==="stage4")setTimeout(startHourly,0);
 }
 /* tolerance checks */
@@ -405,14 +411,6 @@ function s1(d){
   ${fA("s1_comments","Comments",d.comments)}
   <h3>QC — Job Running Quality Control Tests</h3>${repTable("_runs",runCols,"+ Add roll")}
   ${photoBlock(d)}${saveBar("stage1")}`;
-}
-function s2(d){ const rows=(d.rows&&d.rows.length)?d.rows:[{roll:"1",totalMeters:"",wasteIn:"",wasteOut:"",defect:"",weightKg:"",sign:""}]; window._rows=rows;
-  const defOpts=(MD.defectTypes||[]).map(x=>`<option>${esc(x)}</option>`).join("");
-  const body=rows.map((x,i)=>`<tr><td><input data-rw="${i}" data-f="roll" value="${esc(x.roll)}" style="width:54px"></td><td><input data-rw="${i}" data-f="totalMeters" value="${esc(x.totalMeters)}"></td><td><input data-rw="${i}" data-f="wasteIn" value="${esc(x.wasteIn)}"></td><td><input data-rw="${i}" data-f="wasteOut" value="${esc(x.wasteOut)}"></td><td><input list="defl" data-rw="${i}" data-f="defect" value="${esc(x.defect)}"></td><td><input data-rw="${i}" data-f="weightKg" value="${esc(x.weightKg)}"></td><td><input data-rw="${i}" data-f="sign" value="${esc(x.sign)}"></td><td><button class="btn danger sm" onclick="rwDel(${i})">×</button></td></tr>`).join("");
-  return `<datalist id="defl">${defOpts}</datalist><h3>Reel Inspection Header (F-021)</h3><div class="grid g4">${fT("s2_date","Date",d.date||JOB.created)}${fT("s2_machineName","Machine Name",d.machineName)}${fT("s2_shift","Shift",d.shift)}${fT("s2_qaOfficer","QA Officer",d.qaOfficer)}${fT("s2_operator","Operator",d.operator)}${fT("s2_avtRef","AVT Report Ref",d.avtRef)}</div>
-  <div class="row-actions"><button class="btn ghost sm" onclick="avtImportInline()">⤓ Import AVT report (CSV)</button></div>
-  <h3>Defect &amp; Waste Log (per roll)</h3><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th><th>Sign</th><th></th></tr></thead><tbody id="s2body">${body}</tbody></table></div>
-  <div class="row-actions"><button class="btn ghost sm" onclick="rwAdd()">+ Add row</button></div>${fA("s2_remarks","Remarks",d.remarks)}${photoBlock(d)}${saveBar("stage2")}`;
 }
 function s3(d){
   window._proc=(d.inProcessChecks&&d.inProcessChecks.length)?d.inProcessChecks:[{}];
@@ -455,9 +453,6 @@ function startHourly(){ renderSig(); if(hourlyTimer)clearInterval(hourlyTimer); 
 /* repeating-row helpers */
 function round2(n){ return Math.round((parseFloat(n)||0)*100)/100; }
 function collectSt(){ document.querySelectorAll('#stageform input[data-st]').forEach(i=>{ const x=window._st[+i.dataset.st]; if(x)x[i.dataset.f]=i.value; }); }
-function collectRw(){ document.querySelectorAll('#s2body input[data-rw]').forEach(i=>{ const x=window._rows[+i.dataset.rw]; if(x)x[i.dataset.f]=i.value; }); }
-function rwAdd(){ syncStage("stage2"); window._rows.push({roll:String(window._rows.length+1),totalMeters:"",wasteIn:"",wasteOut:"",defect:"",weightKg:"",sign:""}); stageForm("stage2"); }
-function rwDel(i){ syncStage("stage2"); window._rows.splice(i,1); if(!window._rows.length)window._rows.push({roll:"1"}); stageForm("stage2"); }
 function collectCk(){ document.querySelectorAll('#s4body tr').forEach(tr=>{ const t=tr.querySelector('input[data-time]'); if(!t)return; const i=+t.dataset.ck; if(!window._checks[i])return; window._checks[i].time=t.value; window._checks[i].vals=window._checks[i].vals||{}; tr.querySelectorAll('[data-p]').forEach(s=>{ window._checks[i].vals[s.dataset.p]=s.value; }); }); }
 function ckAdd(now){ syncStage("stage4"); const t=now?new Date().toTimeString().slice(0,5):""; window._checks.push({time:t,vals:{}}); stageForm("stage4"); }
 function ckDel(i){ syncStage("stage4"); window._checks.splice(i,1); if(!window._checks.length)window._checks.push({time:"",vals:{}}); stageForm("stage4"); }
@@ -495,20 +490,17 @@ function saveBar(stage){ return `<div class="row-actions no-print" style="margin
 function validateStageData(stage,d){
   const reqs={
     stage1:[["date","Date"],["qaOfficer","QA Officer"],["proceed","Proceed With Job"]],
-    stage2:[["date","Date"],["qaOfficer","QA Officer"]],
     stage3:[["date","Date"],["operatorName","Operator"],["startTime","Start Time"],["finishTime","Finish Time"]],
     stage4:[["date","Date"]]
   };
   const miss=[]; (reqs[stage]||[]).forEach(([k,l])=>{ if(!String(d[k]||"").trim()) miss.push(l); });
   if(stage==="stage1" && !((d.materials||[]).some(m=>String((m&&m.materialType)||"").trim()))) miss.push("Material Type");
-  if(stage==="stage2" && !((d.rows||[]).some(r=>String(r.totalMeters||"").trim()||String(r.defect||"").trim()))) miss.push("At least one reel row");
   if(stage==="stage4"){ if(!((d.checks||[]).some(c=>String(c.time||"").trim()))) miss.push("At least one hourly check"); if(!d.signature) miss.push("Signature"); }
   return miss;
 }
 /* Collect the live form state for a stage from the DOM + window arrays (no _done flag). */
 function collectStageData(stage){ let data={};
   if(stage==="stage1"){ collectSt(); collectArr("_materials"); collectArr("_runs"); data.stations=window._st; data.materials=window._materials; data.runningTests=window._runs; ["date","productDescription","proceed","operator","qaOfficer","supervisor","unwinderTension","infeedTension","outfeedTension","rewindTension","machineSpeed","corona1","corona2","corona3","corona4","setupText","setupColour","setupRegistration","setupInkAdhesion","setupGs1","setupCofFilmMetal","setupCofFilmFilm","setupInkScuffing","approvalQa","approvalOperator","approvalSupervisor","comments"].forEach(k=>data[k]=val("s1_"+k)); }
-  else if(stage==="stage2"){ collectRw(); data.rows=window._rows; ["date","machineName","shift","qaOfficer","operator","avtRef","remarks"].forEach(k=>data[k]=val("s2_"+k)); }
   else if(stage==="stage3"){ collectArr("_proc"); collectArr("_prod"); collectArr("_waste"); data.inProcessChecks=window._proc; data.productionSummary=window._prod; data.wasteRows=window._waste; ["date","customerItem","startTime","finishTime","infeedRoll","infeedMaterial","infeedReelSize","infeedGrammage","infeedCuttingRepeat","dtMaterial","dtWinding","dtReelDamage","dtMechanical","dtElectrical","operatorName","qaOfficer","supervisor","comments"].forEach(k=>data[k]=val("s3_"+k)); }
   else if(stage==="stage4"){ collectCk(); data.checks=window._checks; ["date","productItem","shift","shiftStartFinish","labelWidth","labelLength","labelThickness","quantityOnHold","reasonForRejection","disposition","unwantedMaterialsRemoved","nextShiftQaHandover"].forEach(k=>data[k]=val("s4_"+k)); data.signature=window._sig||(JOB.stage4&&JOB.stage4.signature)||""; }
   data.photos=window._photos||[];
@@ -518,8 +510,8 @@ function collectStageData(stage){ let data={};
 function syncStage(stage){ if(!JOB||!stage)return; JOB[stage]=Object.assign(JOB[stage]||{}, collectStageData(stage)); }
 async function saveStage(stage,done){ let data=collectStageData(stage); data._done=done;
   if(done){
-    const n=Number(stage.slice(-1));
-    for(let k=1;k<n;k++){ if(!(JOB["stage"+k]&&JOB["stage"+k]._done)){ toast("Complete Stage "+k+" before marking Stage "+n+" complete"); return; } }
+    const pos=STAGES.findIndex(s=>s.key===stage);
+    for(let k=0;k<pos;k++){ const p=STAGES[k]; if(!(JOB[p.key]&&JOB[p.key]._done)){ toast("Complete "+p.name+" before marking "+stageName(stage)+" complete"); return; } }
     const miss=validateStageData(stage,data);
     if(miss.length){ toast("Can't complete — missing: "+miss.join(", ")); return; }
   }
@@ -544,10 +536,6 @@ async function scanBarcode(targetId){
 }
 function closeModal(){ if(window._scanInt)clearInterval(window._scanInt); if(window._scanStream)window._scanStream.getTracks().forEach(t=>t.stop()); $("#modalRoot").innerHTML=""; }
 
-/* AVT inline import into stage 2 */
-function avtImportInline(){ const root=$("#modalRoot"); root.innerHTML=`<div class="modal-bg"><div class="modal"><h2>Import AVT Report (CSV)</h2><p class="sub">Headers: Roll, TotalMeters, WasteIn, WasteOut, Defect, WeightKg</p><textarea id="avtcsv" style="min-height:150px" placeholder="Roll,TotalMeters,WasteIn,WasteOut,Defect,WeightKg&#10;1,5000,40,35,Hickey,1.1"></textarea><div class="row-actions"><button class="btn gold" onclick="avtDo()">Import rows</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`; }
-async function avtDo(){ const csv=$("#avtcsv").value; try{ const r=await api("/api/avt-import",{method:"POST",body:{csv}}); if(r.error){toast(r.error);return;} collectRw(); window._rows=(window._rows||[]).filter(x=>x.totalMeters||x.defect).concat(r.rows); if(!window._rows.length)window._rows=r.rows; closeModal(); stageForm("stage2"); toast("Imported "+r.count+" rows"); }catch(e){ toast(e.message); } }
-
 /* lookup */
 async function lookup(){
   const pre=CUR.jobNo||"";
@@ -557,16 +545,22 @@ async function lookup(){
 }
 async function doLook(){ const no=$("#lk").value.trim(); const host=$("#lkr"); if(!no){host.innerHTML="";return;}
   let j; try{ j=await api("/api/jobs/"+encodeURIComponent(no)); }catch(e){ host.innerHTML=`<div class="card"><div class="empty">No job found for <b>${esc(no)}</b>.</div></div>`; return; }
-  const done=n=>j["stage"+n]&&j["stage"+n]._done; const c=[1,2,3,4].filter(done).length;
+  const done=n=>j["stage"+n]&&j["stage"+n]._done; const c=FLOW.filter(done).length;
   const kv=(l,v)=>`<div><span>${l}</span><b>${esc(v||"—")}</b></div>`;
   const kvb=ps=>`<div class="kv">${ps.map(p=>kv(p[0],p[1])).join("")}</div>`;
   const sBox=(n,nm,dn,inner)=>`<div class="summary-stage"><div class="head">Stage ${n} · ${esc(nm)} ${dn?'<span class="pill green">Complete</span>':'<span class="pill grey">Pending</span>'}</div><div class="body">${dn?inner:'<div class="empty" style="padding:16px">Not yet recorded.</div>'}</div></div>`;
   const matOf=s1=>((s1.materials&&s1.materials.length)?(s1.materials[0]||{}).materialType:s1.materialType)||"";
   const a=j.stage1||{}; let s1h=""; if(a._done){ s1h=kvb([["Date",a.date],["QA Officer",a.qaOfficer],["Operator",a.operator],["Proceed",a.proceed],["Material",matOf(a)],["Speed",a.machineSpeed],["Setup GS1",a.setupGs1],["COF f-m",a.setupCofFilmMetal]])+((a.materials&&a.materials.length)?`<h4>Materials</h4><div style="overflow-x:auto"><table><thead><tr><th>Material</th><th>Gauge</th><th>GSM</th><th>Dyne</th><th>Supplier</th><th>Batch#</th></tr></thead><tbody>${a.materials.map(m=>`<tr><td>${esc(m.materialType)}</td><td>${esc(m.gauge)}</td><td>${esc(m.grammage)}</td><td>${esc(m.dyne)}</td><td>${esc(m.supplier)}</td><td>${esc(m.batch)}</td></tr>`).join("")}</tbody></table></div>`:"")+((a.stations&&a.stations.length)?`<h4>Print Stations</h4><div style="overflow-x:auto"><table><thead><tr><th>Station</th><th>Ink Type</th><th>Ink Batch#</th></tr></thead><tbody>${a.stations.map(s=>`<tr><td>${esc(s.name)}</td><td>${esc(s.inkType||s.ink||"")}</td><td>${esc(s.inkBatch||s.batch||"")}</td></tr>`).join("")}</tbody></table></div>`:"")+photosView(a); }
-  const b=j.stage2||{}; let s2h=""; if(b._done){ s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b); }
+  // Reel Inspection (F-021) is no longer part of the QA flow, but historical records stay on the
+  // job and are shown read-only for traceability — signed inspection data is never deleted.
+  const b=j.stage2||{}; let legacyBox="";
+  if(b._done || (b.rows||[]).some(r=>r.roll||r.defect)){
+    const s2h=kvb([["Date",b.date],["Machine",b.machineName],["Shift",b.shift],["QAO",b.qaOfficer],["AVT Ref",b.avtRef]])+`<h4>Defect & Waste Log</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Total m</th><th>Waste In</th><th>Waste Out</th><th>Defect</th><th>Kg</th></tr></thead><tbody>${(b.rows||[]).filter(x=>x.roll||x.defect).map(x=>`<tr><td>${esc(x.roll)}</td><td>${esc(x.totalMeters)}</td><td>${esc(x.wasteIn)}</td><td>${esc(x.wasteOut)}</td><td>${esc(x.defect)}</td><td>${esc(x.weightKg)}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(b);
+    legacyBox=`<div class="summary-stage"><div class="head">Reel Inspection (legacy · F-021) ${b._done?'<span class="pill green">Complete</span>':'<span class="pill grey">Draft</span>'}</div><div class="body">${s2h}</div></div>`;
+  }
   const e=j.stage3||{}; let s3h=""; if(e._done){ const ps=e.productionSummary||e.rolls||[]; s3h=kvb([["Date",e.date],["Operator",e.operatorName],["QA Officer",e.qaOfficer],["Start",e.startTime],["Finish",e.finishTime],["Infeed Material",e.infeedMaterial]])+`<h4>Production Summary</h4><div style="overflow-x:auto"><table><thead><tr><th>Roll</th><th>Source</th><th>Input m</th><th>Output m</th><th># Sheets</th><th>Pallet</th></tr></thead><tbody>${ps.map(r=>`<tr><td>${esc(r.roll||r.no||"")}</td><td>${esc(r.source||"")}</td><td>${esc(r.inputMeters||"")}</td><td>${esc(r.outputMeters||r.totalSheets||"")}</td><td>${esc(r.sheets||"")}</td><td>${esc(r.pallet||"")}</td></tr>`).join("")||'<tr><td colspan=6>—</td></tr>'}</tbody></table></div>`+photosView(e); }
   const f=j.stage4||{}; let s4h=""; if(f._done){ const pillVal=v=>(v==="Pass"||v==="Correct"||v==="Tight"||v==="Flat")?'<span class="pill green">'+esc(v)+'</span>':(v==="Fail"||v==="Incorrect"||v==="Loose"||v==="Curl")?'<span class="pill red">'+esc(v)+'</span>':esc(v||"—"); const hdr=`<tr><th>Time</th>${HOURLY_COLS.map(col=>`<th title="${esc(col.k)}">${esc(col.k.split(" ")[0])}</th>`).join("")}</tr>`; const cr=(f.checks||[]).filter(c=>c.time).map(c=>`<tr><td><b>${esc(c.time)}</b></td>${HOURLY_COLS.map(col=>`<td>${pillVal(c.vals&&c.vals[col.k])}</td>`).join("")}</tr>`).join("")||`<tr><td colspan=${HOURLY_COLS.length+1}>No checks</td></tr>`; s4h=kvb([["Date",f.date],["Shift",f.shift],["Label W×L",(f.labelWidth||"?")+" × "+(f.labelLength||"?")],["Qty On-Hold",f.quantityOnHold],["Disposition",f.disposition],["Handover",f.nextShiftQaHandover]])+`<h4>Hourly Checks</h4><div style="overflow-x:auto"><table><thead>${hdr}</thead><tbody>${cr}</tbody></table></div>`+(f.signature?`<h4>Signature</h4><img src="${esc(f.signature)}" style="max-height:90px;border:1px solid var(--line);border-radius:8px">`:"")+photosView(f); }
-  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<4?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of 4 complete</p>${sBox(1,"Printing",a._done,s1h)}${sBox(2,"Reel Inspection",b._done,s2h)}${sBox(3,"Sheeting / Slitting",e._done,s3h)}${sBox(4,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
+  host.innerHTML=`<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><h2 style="margin:0">${esc(j.jobNo)} ${statusPill(j.statusOverride||(c===0?'New':(c<FLOW.length?'In Progress':'Released')))}</h2><span class="tag-machine">${esc(mlabel(j.machine))}</span><div style="margin-left:auto" class="no-print"><button class="btn ghost sm" onclick="go('entry',{jobNo:'${jsq(j.jobNo)}'})">Edit</button> <button class="btn ghost sm" onclick="openAmend('${jsq(j.jobNo)}','${jsq(j.jobNo)}')">Amendments</button> <button class="btn gold sm" onclick="window.print()">📄 SQF PDF</button></div></div><p class="sub">${esc(j.product||'—')} · ${esc(j.customer||'')} · Created ${esc(j.created)} · ${c} of ${FLOW.length} complete</p>${sBox(1,"Printing",a._done,s1h)}${legacyBox}${sBox(2,"Sheeting / Slitting",e._done,s3h)}${sBox(3,"Finishing & Release",f._done,s4h)}<p class="sub" style="margin-top:10px">Golden Manufacturers Pte Ltd · QA in-process record · printed ${new Date().toLocaleString()}</p></div>`;
 }
 function photosView(s){ return (s.photos&&s.photos.length)?`<h4>Photos</h4><div class="thumbs">${s.photos.map(u=>`<img src="${esc(u)}">`).join("")}</div>`:""; }
 
@@ -648,7 +642,7 @@ function capaModal(id, prefill){
       <div class="field"><label>Severity</label><select id="ca_sev">${sevOpts}</select></div>
     </div>
     <div class="field"><label>Title <span class="req">*</span></label><input id="ca_title" value="${esc(c?c.title:(p.title||''))}" placeholder="Short description of the issue"></div>
-    <div class="field"><label>Source</label><input id="ca_source" value="${esc(c?c.source:(p.source||''))}" placeholder="e.g. Reel Inspection (F-021), customer complaint"></div>
+    <div class="field"><label>Source</label><input id="ca_source" value="${esc(c?c.source:(p.source||''))}" placeholder="e.g. Sheeting / Slitting (PRD002), customer complaint"></div>
     <div class="field"><label>Root cause</label><textarea id="ca_root">${esc(c?c.rootCause:'')}</textarea></div>
     <div class="field"><label>Corrective action</label><textarea id="ca_corr">${esc(c?c.correctiveAction:'')}</textarea></div>
     <div class="field"><label>Preventive action</label><textarea id="ca_prev">${esc(c?c.preventiveAction:'')}</textarea></div>
@@ -1223,7 +1217,7 @@ function userModal(id){ const u=id?(window._users||[]).find(x=>x.id===id):null;
     <div class="field"><label>Name <span class="req">*</span></label><input id="u_name" value="${u?esc(u.name):''}"></div>
     <div class="field"><label>E-mail (optional; matches a Microsoft/Entra SSO identity)</label><input id="u_email" type="email" autocapitalize="none" value="${u?esc(u.email||''):''}" placeholder="e.g. jsmith@golden.com.fj"></div>
     <div class="field"><label>Role <span class="req">*</span></label><select id="u_role">${ROLES.map(r=>`<option ${u&&u.role===r?'selected':''}>${esc(r)}</option>`).join("")}</select></div>
-    <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${[1,2,3,4].map(s=>`<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${s}" ${u&&(u.qualifiedStages||[]).map(Number).includes(s)?'checked':''} style="width:auto;min-height:0;margin-right:6px">Stage ${s}</label>`).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
+    <div class="field"><label>Qualified to sign off stages</label><div style="display:flex;gap:14px;flex-wrap:wrap">${STAGES.map(s=>{const n=Number(s.key.slice(5));return `<label style="text-transform:none;font-weight:600"><input type="checkbox" class="u_qs" value="${n}" ${u&&(u.qualifiedStages||[]).map(Number).includes(n)?'checked':''} style="width:auto;min-height:0;margin-right:6px">${esc(s.name)}</label>`;}).join("")}</div><p class="sub" style="margin-top:6px">Enforced only when competency checks are on (Settings); Administrators always bypass.</p></div>
     <div class="field"><label>Password${u?' (leave blank to keep current)':' <span class="req">*</span>'}</label><input id="u_pass" type="password" autocomplete="new-password" placeholder="${u?'••••••':'min 6 characters'}"></div>
     <div class="row-actions"><button class="btn gold" onclick="saveUser(${u?`'${jsq(u.id)}'`:'null'})">Save</button><button class="btn ghost" onclick="closeModal()">Cancel</button></div></div></div>`;
 }

@@ -15,7 +15,6 @@ const PUB = path.join(ROOT, 'public');
 fs.mkdirSync(UP_DIR, { recursive: true });
 
 const NOTIFY = require('./integrations/notify');
-const AVT = require('./integrations/avtImport');
 const EMAIL = require('./integrations/email');
 const ENTRA = require('./integrations/entraId');
 const BACKUP = require('./integrations/backup');
@@ -226,7 +225,7 @@ function seedJobs() {
         approvalQa:'Proceed',approvalOperator:'Proceed',approvalSupervisor:'Proceed',
         runningTests:[{roll:'1',text:'Pass',colour:'Pass',registration:'Within tolerance',inkAdhesion:'Pass',gs1:'A',cofFilmMetal:'',cofFilmFilm:'',inkScuffing:'Pass - no ink transfer',comments:''}],
         comments:'Cold foil aligned.',photos:[]},
-      stage2:{_done:false}, stage3:{_done:false}, stage4:{_done:false} },
+      stage3:{_done:false}, stage4:{_done:false} },
     { jobNo:'SK-24795', customer:'StarKist', productType:'Starkist Paper Labels', itemCode:'SK-85-WR', product:'Chunk Light 85g Wrap Label', machine:'BOBST', description:'Laminated wrap', created:'2026-06-15',
       stage1:{_done:true,date:'2026-06-15',productDescription:'Chunk Light 85g Wrap',proceed:'Yes',operator:'A. Chand',qaOfficer:'A. Kumar',supervisor:'R. Prasad',
         materials:[{materialType:'BOPP/Foil laminate',gauge:'',grammage:'',dyne:'',supplier:'Innovia',batch:'AD-220'}],
@@ -465,8 +464,15 @@ function verifyAuditChain(){
   if(DB.audit.length>0 && checked===0) return { ok:false, reason:'no signed entries — audit chain unverifiable', total:DB.audit.length, checked, legacy };
   return { ok:true, total:DB.audit.length, checked, legacy };
 }
-function completedStages(j){ return [1,2,3,4].filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
-function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<4?'In Progress':'Released'); }
+/* The QA flow. Stage 2 (Reel Inspection / F-021) was removed from the flow — it's the operator's
+   record, not QA's — but its storage key is retained: legacy jobs keep their signed stage2 data and
+   stage3/stage4 keys keep their numbers so audit history, competency arrays and offline-queued
+   saves stay valid. */
+const FLOW_STAGES=[1,3,4];
+const PREV_STAGE={3:1,4:3};
+const STAGE_NAMES={1:'Printing',3:'Sheeting / Slitting',4:'Finishing & Release'};
+function completedStages(j){ return FLOW_STAGES.filter(n=>j['stage'+n]&&j['stage'+n]._done).length; }
+function jobStatus(j){ if(j.statusOverride) return j.statusOverride; const c=completedStages(j); return c===0?'New':(c<FLOW_STAGES.length?'In Progress':'Released'); }
 /* Stage-1 setup-template support: machine/product-keyed default settings. */
 const TEMPLATE_SETTING_KEYS=['unwinderTension','infeedTension','outfeedTension','rewindTension','machineSpeed','corona1','corona2','corona3','corona4'];
 function cleanTemplate(b){ const machines=(DB.masterdata&&DB.masterdata.machines)||{}; const pts=(DB.masterdata&&DB.masterdata.productTypes)||[];
@@ -670,7 +676,6 @@ function loginClear(key){ LOGIN_FAILS.delete(key); }
 /* Required fields enforced when a stage is marked complete (mirrored on the client). */
 const STAGE_REQUIRED = {
   '1': [['date','Date'],['qaOfficer','QA Officer'],['proceed','Proceed With Job']],
-  '2': [['date','Date'],['qaOfficer','QA Officer']],
   '3': [['date','Date'],['operatorName','Operator'],['startTime','Start Time'],['finishTime','Finish Time']],
   '4': [['date','Date']]
 };
@@ -679,7 +684,6 @@ function validateComplete(n, d){
   (STAGE_REQUIRED[n]||[]).forEach(([k,l])=>{ if(!String((d&&d[k])||'').trim()) miss.push(l); });
   // Stage 1 raw materials are a repeating table; accept the legacy scalar too for older drafts/imports.
   if(n==='1' && !((d.materials||[]).some(m=>String((m&&m.materialType)||'').trim()) || String((d&&d.materialType)||'').trim())) miss.push('Material Type');
-  if(n==='2' && !((d.rows||[]).some(r=>String(r.totalMeters||'').trim()||String(r.defect||'').trim()))) miss.push('At least one reel row');
   if(n==='4'){
     if(!((d.checks||[]).some(c=>String(c.time||'').trim()))) miss.push('At least one hourly check');
     if(!(d&&d.signature)) miss.push('Signature');
@@ -815,7 +819,7 @@ async function api(req, res, url) {
     if(!jobNo||!String(b.machine||'').trim()) return send(res,400,{error:'jobNo and machine required'});
     if(!machineExists(b.machine)) return send(res,400,{error:'Unknown machine — pick one from master data'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===jobNo.toLowerCase())) return send(res,409,{error:'Job already exists'});
-    const job={ jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
+    const job={ jobNo, machine:b.machine, productType:b.productType||'', itemCode:b.itemCode||'', customer:b.customer||'StarKist', product:b.product||'', description:b.description||'', created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     applyTemplateToJob(job); // pre-fill Stage 1 defaults from the best-matching press/product template
     DB.jobs.unshift(job); audit(user,'create-job',job.jobNo, job.templateApplied?('template: '+job.templateApplied):''); saveDB(); return send(res,200,job);
   }
@@ -825,7 +829,7 @@ async function api(req, res, url) {
     const b=await readBody(req); const newNo=String(b.jobNo||'').trim();
     if(!newNo) return send(res,400,{error:'New Job # required'});
     if(DB.jobs.find(x=>x.jobNo.toLowerCase()===newNo.toLowerCase())) return send(res,409,{error:'A job with that number already exists'});
-    const job={ jobNo:newNo, machine:src.machine, productType:src.productType||'', itemCode:src.itemCode||'', customer:src.customer, product:src.product, description:src.description, created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage2:{_done:false},stage3:{_done:false},stage4:{_done:false} };
+    const job={ jobNo:newNo, machine:src.machine, productType:src.productType||'', itemCode:src.itemCode||'', customer:src.customer, product:src.product, description:src.description, created:new Date().toISOString().slice(0,10), stage1:{_done:false},stage3:{_done:false},stage4:{_done:false} };
     DB.jobs.unshift(job); audit(user,'clone-job',newNo,'from '+src.jobNo); saveDB(); return send(res,200,job);
   }
   if (seg[0]==='jobs' && seg[1] && !seg[2] && method==='PUT') {
@@ -848,10 +852,14 @@ async function api(req, res, url) {
     const j = DB.jobs.find(x=>x.jobNo.toLowerCase()===decodeURIComponent(seg[1]).toLowerCase());
     if(!j) return send(res,404,{error:'Job not found'});
     const n = seg[3]; const b = await readBody(req);
-    if(!['1','2','3','4'].includes(n)) return send(res,400,{error:'Invalid stage — must be 1, 2, 3 or 4'});
-    if(b.data && b.data._done){
-      const prev = Number(n)-1;
-      if(prev>=1 && !(j['stage'+prev] && j['stage'+prev]._done)) return send(res,409,{error:'Complete Stage '+prev+' before completing Stage '+n});
+    if(!['1','2','3','4'].includes(n)) return send(res,400,{error:'Invalid stage — must be 1, 3 or 4'});
+    // Stage 2 (Reel Inspection) is no longer part of the QA flow, but remains a legacy write sink:
+    // offline tablets may still hold queued F-021 saves recorded before the change, and rejecting
+    // them with a 4xx would make flushQueue() drop a signed inspection record. Accept + audit the
+    // write, skip the completion gating — a stage2 record can never affect job status.
+    if(b.data && b.data._done && n!=='2'){
+      const prev = PREV_STAGE[Number(n)];
+      if(prev && !(j['stage'+prev] && j['stage'+prev]._done)) return send(res,409,{error:'Complete '+STAGE_NAMES[prev]+' before completing '+STAGE_NAMES[Number(n)]});
       const miss = validateComplete(n, b.data);
       if(miss.length) return send(res,400,{error:'Cannot mark complete — missing: '+miss.join(', '), missing:miss});
       if(DB.masterdata.competencyEnforced && user.role!=='Administrator' && !(user.qualifiedStages||[]).map(Number).includes(Number(n)))
@@ -1289,8 +1297,6 @@ async function api(req, res, url) {
 
   if (seg[0]==='exec' && method==='GET') { if(!isManager(user)) return send(res,403,{error:'Not permitted'}); return send(res,200, exec()); }
 
-  if (seg[0]==='avt-import' && method==='POST') { const b=await readBody(req); const r=AVT.parse(b.csv||''); return send(res, (r && r.error)?400:200, r); }
-
   if (seg[0]==='analytics' && method==='GET') return send(res,200, analytics({ from:url.searchParams.get('from')||'', to:url.searchParams.get('to')||'', shift:url.searchParams.get('shift')||'' }));
   if (seg[0]==='spc' && method==='GET') return send(res,200, spc(url.searchParams.get('param')||'cof'));
   if (seg[0]==='suppliers' && method==='GET') return send(res,200, suppliers());
@@ -1307,11 +1313,11 @@ async function api(req, res, url) {
 
   if (seg[0]==='export' && seg[1]==='jobs.csv' && method==='GET') {
     const ml=m=>(DB.masterdata.machines && DB.masterdata.machines[m] && DB.masterdata.machines[m].label) || m;
-    const lines=[['Job #','Customer','Product','Machine','Created','Status','Stages Complete','S1 Date','S1 QA Officer','S1 Proceed','S2 Date','S3 Date','S4 Date','S4 Disposition','S4 Qty On-Hold','S4 Handover']];
-    DB.jobs.forEach(j=>{ const s1=j.stage1||{}, s2=j.stage2||{}, s3=j.stage3||{}, s4=j.stage4||{};
+    const lines=[['Job #','Customer','Product','Machine','Created','Status','Stages Complete','S1 Date','S1 QA Officer','S1 Proceed','S3 Date','S4 Date','S4 Disposition','S4 Qty On-Hold','S4 Handover']];
+    DB.jobs.forEach(j=>{ const s1=j.stage1||{}, s3=j.stage3||{}, s4=j.stage4||{};
       lines.push([ j.jobNo, j.customer, j.product, ml(j.machine), j.created, jobStatus(j), completedStages(j),
         s1._done?s1.date:'', s1._done?s1.qaOfficer:'', s1._done?s1.proceed:'',
-        s2._done?s2.date:'', s3._done?s3.date:'', s4._done?s4.date:'',
+        s3._done?s3.date:'', s4._done?s4.date:'',
         s4._done?(s4.disposition||''):'', s4._done?(s4.quantityOnHold||''):'', s4._done?(s4.nextShiftQaHandover||''):'' ]); });
     const csv='﻿'+lines.map(r=>r.map(csvCell).join(',')).join('\r\n');
     audit(user,'export-csv','', DB.jobs.length+' jobs');

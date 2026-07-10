@@ -15,7 +15,7 @@ A role-based training programme for the Starkist label QA system. Pair this with
 2. **Sign in** — username + password, or **Sign in with Microsoft 365**.
 3. **Orient yourself** — the left sidebar groups everything: **Overview · Inspection · Quality ·
    Reports · Settings**. The top-right shows your name/role, the online dot, and Logout.
-4. **The golden rule:** everything is keyed to a **Job #**, tracked through **4 stages**, and every
+4. **The golden rule:** everything is keyed to a **Job #**, tracked through **3 stages**, and every
    action is logged in a tamper-evident **audit trail**. Work carefully and honestly.
 
 **Connectivity:** green dot = online. If it goes red, keep working — your entries queue and a
@@ -26,7 +26,10 @@ A role-based training programme for the Starkist label QA system. Pair this with
 ## 1. QA Officer — *the inspector* (core training)
 
 You capture inspection data on the floor. Daily flow: **create or open a job → complete each stage
-→ photograph defects → sign off Stage 4**.
+→ photograph defects → sign off Stage 3 (Finishing & Release)**.
+
+> Reel Inspection (F-021) is no longer part of the QA flow — it belongs to the operator. Historical
+> F-021 entries on older jobs are still visible (read-only) in Job Lookup.
 
 ### 1.1 Create a job
 **New Job →** select the **Printing Machine**, **scan (📷)** or type the **Job #**, confirm
@@ -37,30 +40,26 @@ Fill Job Details, Material, Print Stations, Machine Settings, QC Inspection. Wat
 **Print Registration** fields — they show a green ✓ or red ✗ against tolerance as you type.
 Add photos of any defect. **Save Draft** anytime; **Save & Mark Complete** when done.
 
-### 1.3 Stage 2 — Reel Inspection
-Add a row per roll (meters, waste in/out, defect, weight, sign). If you have an **AVT report**, use
-**⤓ Import AVT report (CSV)** to fill rows automatically. Complete when ≥1 roll is logged.
-
-### 1.4 Stage 3 — Sheeting / Slitting
+### 1.3 Stage 2 — Sheeting / Slitting
 Record rolls produced, random quality checks, and down-time hours. Complete with the required
 fields (date, operator, start/finish).
 
-### 1.5 Stage 4 — Finishing & Release
+### 1.4 Stage 3 — Finishing & Release
 - Add an **hourly check** each hour — the warning banner tells you when the next is due.
 - Log any rejections, **sign** on the canvas (**Save signature**), and set the **Final Release
   Decision** (Released / Hold / Rejected).
 - A decision of **Hold/Rejected** alerts the managers automatically.
 
-### 1.6 Look up a record
-**Job Lookup →** scan/type the Job # → **Search** → review all four stages → **📄 SQF PDF** to print.
+### 1.5 Look up a record
+**Job Lookup →** scan/type the Job # → **Search** → review all three stages → **📄 SQF PDF** to print.
 
-> **Exercise (QA Officer):** create `TRN-101`, complete Stages 1–3 with sample data and one defect
-> photo, then complete Stage 4 with two hourly checks, a signature, and a **Released** decision.
+> **Exercise (QA Officer):** create `TRN-101`, complete Stages 1–2 with sample data and one defect
+> photo, then complete Stage 3 with two hourly checks, a signature, and a **Released** decision.
 > Finally, look it up and print the SQF PDF.
 
 **Checklist**
 - [ ] I can create a job and scan a Job #.
-- [ ] I can complete all four stages and read the tolerance auto-flags.
+- [ ] I can complete all three stages and read the tolerance auto-flags.
 - [ ] I can add a photo and capture a signature.
 - [ ] I understand stages must be completed in order.
 - [ ] I can look up a job and print its SQF record.
@@ -162,9 +161,9 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 - Configure **Microsoft Entra ID SSO** (`deploy/ENTRA-SSO-SETUP.md`) for real Microsoft logins.
 - Review the **login-lockout** thresholds (`config.security`).
 
-> **Exercise (Administrator):** create a test user with only Stage 1 & 2 qualified, turn on
-> competency enforcement, confirm they're blocked on Stage 3, issue a read-only API key and fetch
-> `/api/jobs` with it, then disable enforcement and revoke the key.
+> **Exercise (Administrator):** create a test user qualified for Printing only, turn on
+> competency enforcement, confirm they're blocked on Sheeting / Slitting, issue a read-only API key
+> and fetch `/api/jobs` with it, then disable enforcement and revoke the key.
 
 **Checklist**
 - [ ] I can configure tolerances, targets and the defect list.
@@ -185,7 +184,7 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 | Start a job | **New Job** |
 | Enter/complete stages | **Data Entry** → job → stage tile → *Save & Mark Complete* |
 | Add a defect photo | 📷 **Add photo** in any stage |
-| Sign off & release | **Stage 4** → hourly checks → *Line Clearance* → sign (job releases when all 4 stages complete) |
+| Sign off & release | **Stage 3 (Finishing & Release)** → hourly checks → *Line Clearance* → sign (job releases when all 3 stages complete) |
 | Find a job's full record | **Job Lookup** → scan/type → *SQF PDF* |
 | Log a quality event | **NCR** (→ promote to **CAPA**) |
 | Track corrective action | **CAPA** |
@@ -197,7 +196,7 @@ backup** (takes a safety snapshot first, then replaces all data). Always copy ba
 | Prove the log is intact | **Audit Trail → Verify integrity** *(manager)* |
 
 **Remember:** complete stages **in order**; fill **required fields**; **photograph** defects;
-**hourly checks** in Stage 4 are mandatory; everything you do is **audited**.
+**hourly checks** in Finishing & Release are mandatory; everything you do is **audited**.
 
 ---
 

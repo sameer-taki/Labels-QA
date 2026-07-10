@@ -51,12 +51,14 @@ Passwords are salted and hashed with **scrypt**. Change them in **Admin → User
 
 ---
 
-## 3. The four stages (forms digitised)
+## 3. The three stages (forms digitised)
 
 1. **Printing** — F-040-A / F-016-E / F-027-A (machine chosen at job creation)
-2. **Reel Inspection** — F-021 (per-roll defect & waste log; AVT import)
-3. **Sheeting / Slitting** — PRD002
-4. **Finishing & Release** — F-038-A (mandatory hourly checks, final release decision)
+2. **Sheeting / Slitting** — PRD002
+3. **Finishing & Release** — F-038-A (mandatory hourly checks, final release decision)
+
+> Reel Inspection (F-021) was removed from the QA flow — it is the operator's record, not QA's.
+> Historical F-021 data on existing jobs is preserved and shown read-only in the job summary.
 
 ### Other digitised forms (not tied to a Job #)
 
@@ -105,8 +107,6 @@ item or checklist.
 
 ## 5. Integrations
 
-- **AVT reel report**: Stage 2 → *Import AVT report (CSV)*. Expected headers (any order):
-  `Roll, TotalMeters, WasteIn, WasteOut, Defect, WeightKg`.
 - **Alerts**: hold/reject events call `integrations/notify.js` (Teams webhook now; SMTP email
   hook ready to wire to your relay).
 
@@ -142,11 +142,10 @@ item or checklist.
 ## 8. What's included (feature list)
 
 Tablet-first PWA (installable, offline + sync) · local **Active Directory (LDAPS)** sign-in with AD-group→role mapping (+ local/break-glass accounts, optional Entra SSO) · role-based access ·
-machine-driven Stage-1 forms · all 4 stages with real form fields · barcode/QR Job# scanning ·
+machine-driven Stage-1 forms · all 3 stages with real form fields · barcode/QR Job# scanning ·
 defect photo capture · on-screen signatures · auto pass/fail vs tolerances · mandatory hourly-check
 reminders · Job# lookup with consolidated record · one-tap SQF PDF (Print) · dashboards (defect
-Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · **AVT** reel-report
-import · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
+Pareto, waste, downtime, first-pass yield, **date-range / shift trends**) · hold/reject alerts · **CAPA** corrective/preventive-action tracking (with SLA escalation &
 effectiveness check) · **NCR** non-conformance reports (promote to CAPA) · **equipment &
 calibration register** (due/overdue tracking) · **SPC** control charts (Cp/Cpk) · **supplier
 scorecards** · **executive dashboard** (KPI targets + Red/Amber/Green) · **standalone checklists**
