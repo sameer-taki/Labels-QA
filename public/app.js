@@ -4,6 +4,7 @@
 const YN = ["","Yes","No","N/A"];
 /* option sets (QA spec) */
 const PASS_FAIL = ["","Pass","Fail"];
+const PASS_FAIL_NA = ["","Pass","Fail","N/A"];
 const CORRECT = ["","Correct","Incorrect"];
 const WITHIN_TOL = ["","Within tolerance","Fail"];
 const PROCEED = ["","Proceed","Fail"];
@@ -20,7 +21,7 @@ const HOURLY_COLS = [
 /* Stage-1 job-running QC test columns */
 const RUN_COLS = [
   {k:"text",label:"Text Verification",opts:PASS_FAIL},{k:"colour",label:"Colour vs Reference",opts:PASS_FAIL},
-  {k:"registration",label:"Print Registration",opts:WITHIN_TOL},{k:"inkAdhesion",label:"Ink Adhesion (3M Tape)",opts:PASS_FAIL},
+  {k:"registration",label:"Print Registration",opts:WITHIN_TOL},{k:"inkAdhesion",label:"Ink Adhesion (3M Tape)",opts:PASS_FAIL_NA},
   {k:"gs1",label:"GS1 Barcode"},{k:"cofFilmMetal",label:"COF (Film-Metal)"},{k:"cofFilmFilm",label:"COF (Film-Film)"},
   {k:"inkScuffing",label:"Ink Scuffing @250",opts:INK_SCUFF},{k:"comments",label:"Comments"}
 ];
@@ -403,7 +404,7 @@ function s1(d){
   <h3>Print Stations (${esc(mc.label||JOB.machine)})</h3>${stationTables}
   <h3>Machine Settings</h3><div class="grid g4">${fT("s1_unwinderTension","Unwinder Tension (N)",d.unwinderTension)}${fT("s1_infeedTension","In-Feed Tension (N)",d.infeedTension)}${fT("s1_outfeedTension","Out-Feed Tension (N)",d.outfeedTension)}${fT("s1_rewindTension","Rewind Tension (N)",d.rewindTension)}${fT("s1_machineSpeed","Speed (mpm)",d.machineSpeed)}${fT("s1_corona1","Corona 1 (W·min/m²)",d.corona1)}${fT("s1_corona2","Corona 2 (W·min/m²)",d.corona2)}${fT("s1_corona3","Corona 3 (W·min/m²)",d.corona3)}${fT("s1_corona4","Corona 4 (W·min/m²)",d.corona4)}</div>
   <h3>QC — Job Set-Up Tests</h3><div class="grid g4">
-    ${fS("s1_setupText","Text Verification",d.setupText||"",PASS_FAIL)}${fS("s1_setupColour","Colour vs Reference Standard",d.setupColour||"",PASS_FAIL)}${fS("s1_setupRegistration","Print Registration",d.setupRegistration||"",WITHIN_TOL)}${fS("s1_setupInkAdhesion","Ink Adhesion (3M Tape)",d.setupInkAdhesion||"",PASS_FAIL)}
+    ${fS("s1_setupText","Text Verification",d.setupText||"",PASS_FAIL)}${fS("s1_setupColour","Colour vs Reference Standard",d.setupColour||"",PASS_FAIL)}${fS("s1_setupRegistration","Print Registration",d.setupRegistration||"",WITHIN_TOL)}${fS("s1_setupInkAdhesion","Ink Adhesion (3M Tape)",d.setupInkAdhesion||"",PASS_FAIL_NA)}
     ${fT("s1_setupGs1","GS1 Barcode Verification",d.setupGs1)}
     <div class="field"><label>COF (Film to Metal)</label><input id="s1_setupCofFilmMetal" value="${esc(d.setupCofFilmMetal||'')}"><div id="s1_setupCofFilmMetal_f">${tolFlag("cof",d.setupCofFilmMetal)}</div></div>
     ${fT("s1_setupCofFilmFilm","COF (Film to Film)",d.setupCofFilmFilm)}${fT("s1_setupInkScuffing","Ink Scuffing @250 strokes/4lbs",d.setupInkScuffing)}</div>
