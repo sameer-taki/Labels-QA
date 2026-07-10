@@ -1,5 +1,5 @@
 /* Service worker: cache app shell for offline use on the floor. */
-const CACHE = 'golden-qa-v14';
+const CACHE = 'golden-qa-v15';
 const SHELL = ['./','./index.html','./styles.css','./app.js','./manifest.webmanifest',
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'];
 // Cache each shell entry independently so one failure (e.g. the opaque cross-origin Chart.js

@@ -141,11 +141,23 @@ async function main() {
       !!(r.body && r.body.jobNo === JOB && r.body.machine === 'Flexo450'),
       JSON.stringify(r.body && { jobNo: r.body.jobNo, machine: r.body.machine }));
 
-    // 8. PUT stage 2 _done:true while stage 1 not done -> 409
-    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/2',
-      { data: { _done: true, date: '2026-06-23', qaOfficer: 'A. Kumar' } },
+    // 8. PUT stage 3 _done:true while stage 1 not done -> 409 (flow is 1 -> 3 -> 4)
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/3',
+      { data: { _done: true, date: '2026-06-23', operatorName: 'M. Singh', startTime: '06:00', finishTime: '10:00' } },
       adminToken);
-    eq('PUT stage 2 before stage 1 -> 409', r.status, 409);
+    eq('PUT stage 3 before stage 1 -> 409', r.status, 409);
+
+    // 8b. stage 2 (Reel Inspection) is out of the QA flow — it's a legacy write sink for offline
+    // tablets: accepted without gating, but never counted toward completion/status.
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/2',
+      { data: { _done: true, date: '2026-06-23', qaOfficer: 'A. Kumar', rows: [{ roll: '1', totalMeters: '100' }] } },
+      adminToken);
+    eq('legacy PUT stage 2 accepted -> 200', r.status, 200);
+    r = await request('GET', '/api/jobs', undefined, adminToken);
+    const smokeRow = (r.body || []).find((j) => j.jobNo === JOB);
+    ok('legacy stage 2 does not count toward completion',
+      !!(smokeRow && smokeRow.completed === 0 && smokeRow.status === 'New'),
+      JSON.stringify(smokeRow && { completed: smokeRow.completed, status: smokeRow.status }));
 
     // 9. PUT stage 1 _done:true with EMPTY data -> 400 with missing[]
     r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/1',
@@ -164,6 +176,27 @@ async function main() {
     ok('stage 1 now marked _done',
       !!(r.body && r.body.stage1 && r.body.stage1._done === true),
       JSON.stringify(r.body && r.body.stage1));
+
+    // 10a. stage 4 straight after stage 1 -> 409 (stage 3 is its predecessor; removed stage 2 is skipped)
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/4',
+      { data: { _done: true, date: '2026-06-23', checks: [{ time: '08:00' }], signature: 'data:image/png;base64,x' } },
+      adminToken);
+    eq('PUT stage 4 before stage 3 -> 409', r.status, 409);
+
+    // 10a2. complete the remaining flow stages 3 then 4 -> job Released at 3 of 3
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/3',
+      { data: { _done: true, date: '2026-06-23', operatorName: 'M. Singh', startTime: '06:00', finishTime: '10:00' } },
+      adminToken);
+    eq('PUT stage 3 after stage 1 -> 200', r.status, 200);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB) + '/stage/4',
+      { data: { _done: true, date: '2026-06-23', checks: [{ time: '08:00' }], signature: 'data:image/png;base64,x' } },
+      adminToken);
+    eq('PUT stage 4 after stage 3 -> 200', r.status, 200);
+    r = await request('GET', '/api/jobs', undefined, adminToken);
+    const relRow = (r.body || []).find((j) => j.jobNo === JOB);
+    ok('job Released once the 3 flow stages complete',
+      !!(relRow && relRow.completed === 3 && relRow.status === 'Released'),
+      JSON.stringify(relRow && { completed: relRow.completed, status: relRow.status }));
 
     // 10b. edit job metadata
     r = await request('PUT', '/api/jobs/' + encodeURIComponent(JOB), { product: 'Edited Label', customer: 'StarKist' }, adminToken);
@@ -407,10 +440,10 @@ async function main() {
     await request('POST', '/api/jobs', { jobNo: cjob, machine: 'Flexo450' }, adminToken);
     r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/1', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Comp', proceed: 'Yes', materialType: 'BOPP' } }, compTok);
     eq('qualified stage-1 complete -> 200', r.status, 200);
-    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/2', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Comp', rows: [{ totalMeters: '100' }] } }, compTok);
-    eq('unqualified stage-2 complete -> 403', r.status, 403);
-    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/2', { data: { _done: true, date: '2026-06-23', qaOfficer: 'Admin', rows: [{ totalMeters: '100' }] } }, adminToken);
-    eq('admin bypass stage-2 -> 200', r.status, 200);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/3', { data: { _done: true, date: '2026-06-23', operatorName: 'Comp', startTime: '06:00', finishTime: '10:00' } }, compTok);
+    eq('unqualified stage-3 complete -> 403', r.status, 403);
+    r = await request('PUT', '/api/jobs/' + encodeURIComponent(cjob) + '/stage/3', { data: { _done: true, date: '2026-06-23', operatorName: 'Admin', startTime: '06:00', finishTime: '10:00' } }, adminToken);
+    eq('admin bypass stage-3 -> 200', r.status, 200);
     await request('PUT', '/api/masterdata', { competencyEnforced: false }, adminToken);
     await request('DELETE', '/api/admin/users/' + encodeURIComponent(compU), undefined, adminToken);
 
@@ -518,6 +551,11 @@ async function main() {
     r = await request('GET', '/api/audit/export.csv', undefined, adminToken);
     eq('amendments export.csv -> 200', r.status, 200);
     ok('amendments CSV has From/To columns', typeof r.raw === 'string' && r.raw.indexOf('From') >= 0 && r.raw.indexOf('To') >= 0, (r.raw || '').slice(0, 80));
+
+    // 33. jobs CSV no longer carries the removed Stage 2 (Reel Inspection) column
+    r = await request('GET', '/api/export/jobs.csv', undefined, adminToken);
+    eq('jobs export.csv -> 200', r.status, 200);
+    ok('jobs CSV has no S2 Date column', typeof r.raw === 'string' && r.raw.indexOf('S2 Date') < 0 && r.raw.indexOf('S3 Date') >= 0, (r.raw || '').slice(0, 120));
     r = await request('GET', '/api/audit', undefined, officerToken);
     eq('audit read by non-manager -> 403', r.status, 403);
     r = await request('GET', '/api/audit/verify', undefined, adminToken);

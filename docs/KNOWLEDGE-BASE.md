@@ -32,24 +32,25 @@ accounts manage their password in Microsoft, not here.)
 customer/product → **Create Job & Begin Stage 1**.
 
 ### B2. Enter a stage
-**Data Entry →** pick the job → tap the stage tile (1–4) → fill the form.
+**Data Entry →** pick the job → tap the stage tile (1–3) → fill the form.
 - **Save Draft** keeps your work without completing the stage.
 - **Save & Mark Complete** validates required fields and marks the stage done.
-- Stages must be completed **in order** (you can't complete Stage 3 before Stage 2).
+- Stages must be completed **in order** (you can't complete Sheeting / Slitting before Printing).
 
 ### B3. Add a defect photo / capture a signature
 - **Photos:** in any stage tap **📷 Add photo** (uses the camera on a tablet).
-- **Signature (Stage 4):** sign on the canvas → **Save signature**. Required to complete Stage 4.
+- **Signature (Finishing & Release):** sign on the canvas → **Save signature**. Required to complete the stage.
 
-### B4. Record the four stages
+### B4. Record the three stages
 1. **Printing** — material, print stations, machine settings, QC checks. COF and registration show
    a green ✓ / red ✗ **auto-flag** against tolerances as you type.
-2. **Reel Inspection** — add a row per roll (defect, waste, weight). You can **Import AVT report
-   (CSV)** to fill rows automatically.
-3. **Sheeting / Slitting** — infeed roll, in-process checks, production summary, waste summary, down-time.
-4. **Finishing & Release** — add **hourly checks** (the banner reminds you when one is due), complete
+2. **Sheeting / Slitting** — infeed roll, in-process checks, production summary, waste summary, down-time.
+3. **Finishing & Release** — add **hourly checks** (the banner reminds you when one is due), complete
    the **Line Clearance** (quantity on-hold, disposition, handover) and **sign**. The job is **Released**
-   automatically once all four stages are complete; use **Hold** to stop a release.
+   automatically once all three stages are complete; use **Hold** to stop a release.
+
+> **Reel Inspection (F-021)** is the operator's record and is no longer part of the QA flow.
+> Older jobs that carry F-021 data still show it (read-only) in Job Lookup.
 
 ### B5. Look up a job's full record
 **Job Lookup →** type/scan the Job # → **Search**. You get every stage on one page. Tap

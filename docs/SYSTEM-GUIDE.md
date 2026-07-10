@@ -14,7 +14,7 @@ every feature, who can do what, and how it's configured and deployed. Companion 
 
 Golden QA is a **tablet-first Progressive Web App (PWA)** for in-process quality inspection of
 the Starkist paper-label line. Every label job is keyed to a single **Job #** and tracked through
-**four production stages**. Typing or scanning a Job # returns the full cross-stage record.
+**three production stages**. Typing or scanning a Job # returns the full cross-stage record.
 
 - **Runs on-premise** with zero external runtime dependencies (Node.js built-ins; PostgreSQL is
   optional for higher concurrency).
@@ -49,16 +49,20 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
   Production uses **PostgreSQL** (`DATABASE_URL`); with no `DATABASE_URL` it uses a local
   `data/db.json` file with crash-safe atomic writes. Single-writer (one app container).
 - **Integrations** live in `integrations/`: `entraId.js` (SSO), `email.js` (SMTP), `notify.js`
-  (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events), `avtImport.js`.
+  (Teams), `backup.js` (rotating snapshots), `webhooks.js` (outbound events).
 
-## 3. The four inspection stages
+## 3. The three inspection stages
 
 | # | Stage | Form | Captures |
 |---|-------|------|----------|
 | 1 | **Printing** | F-040-A / F-016-E / F-027-A (per machine) | Job details, material, per-station print setup, machine settings, QC inspection (COF, print registration, GS1 barcode, scuff/tape tests) with **auto pass/fail vs tolerances**, photos |
-| 2 | **Reel Inspection** | F-021 | Header, **per-roll defect & waste log**, AVT report CSV import, photos |
-| 3 | **Sheeting / Slitting** | PRD002 | Job run, rolls produced, random quality checks, **down-time** breakdown, remarks, photos |
-| 4 | **Finishing & Release** | F-038-A | Header, **mandatory hourly QC checks**, rejection log, **final release decision** (Released / Hold / Rejected), on-screen **signature**, photos |
+| 2 | **Sheeting / Slitting** | PRD002 | Job run, rolls produced, random quality checks, **down-time** breakdown, remarks, photos |
+| 3 | **Finishing & Release** | F-038-A | Header, **mandatory hourly QC checks**, rejection log, **final release decision** (Released / Hold / Rejected), on-screen **signature**, photos |
+
+> **Reel Inspection (F-021)** was removed from the QA flow — it is the operator's record, not
+> QA's. Historical F-021 data on existing jobs is preserved and shown read-only in the Job Lookup
+> summary; internally its storage slot (`stage2`) is retained so old records and audit history
+> stay intact.
 
 **Rules enforced**
 - **Stage-in-sequence:** a stage can only be marked *complete* after the previous one is complete.
@@ -76,7 +80,7 @@ the Starkist paper-label line. Every label job is keyed to a single **Job #** an
 
 **Inspection**
 - **New Job** — create a job (machine + Job #, barcode scan, customer/product).
-- **Data Entry** — open a job and fill stages 1–4 (forms, photos, signature). Edit/Clone/Hold/Delete/Raise-CAPA from the header (role-gated).
+- **Data Entry** — open a job and fill stages 1–3 (forms, photos, signature). Edit/Clone/Hold/Delete/Raise-CAPA from the header (role-gated).
 - **Job Lookup** — type/scan a Job # → consolidated cross-stage record; one-tap **SQF PDF** (print).
 
 **Quality**
@@ -218,8 +222,6 @@ Photos and signatures are stored as files under `data/uploads/`.
   `capa.opened`, `capa.closed`, `equipment.calibrated`.
 - **Prometheus `/metrics`** — jobs, FPY, open/overdue CAPAs, equipment, overdue calibrations, uptime.
   Optional `METRICS_TOKEN`.
-- **AVT reel report import** — Stage 2 → *Import AVT report (CSV)*; headers (any order):
-  `Roll, TotalMeters, WasteIn, WasteOut, Defect, WeightKg`.
 
 ## 10. Backups & restore
 
@@ -268,7 +270,6 @@ All endpoints are under `/api`. Auth: `x-token: <session>` (login) or `x-api-key
 | `GET/POST/DELETE /api/admin/webhooks[/:id]` | Webhooks | Administrator |
 | `GET /api/export/jobs.csv` · `GET /api/export/workbook.xls` | CSV · Excel export | authed |
 | `GET /api/digest` · `POST /api/digest/send` | Build · send digest | authed · Supervisor |
-| `POST /api/avt-import` | Parse AVT CSV | authed |
 | `GET /metrics` | Prometheus metrics | open / `METRICS_TOKEN` |
 
 ---
