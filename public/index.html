@@ -17,14 +17,24 @@
       <div class="mark">G</div>
       <h1>GOLDEN Labels &amp; Flexible QA</h1>
       <p>In-Process Quality Inspection</p>
-      <div class="field"><label>Username</label><input id="loginUser" autocomplete="username" autocapitalize="none" placeholder="e.g. admin"></div>
-      <div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" placeholder="Password"></div>
-      <div class="row-actions" style="margin-top:16px">
-        <button class="btn gold block" id="pwLogin">Sign in</button>
+
+      <!-- Clerk mounts its hosted sign-in card here when Clerk is configured (cloud deploy). -->
+      <div id="clerk-signin"></div>
+      <div id="clerkLoading" class="hidden" style="font-size:13px;color:var(--muted);margin:8px 0">Loading sign-in…</div>
+
+      <!-- Local / break-glass password sign-in. Primary form for the on-prem deploy; on the cloud
+           deploy it is hidden behind the "Administrator sign-in" link below Clerk. -->
+      <div id="pwBox">
+        <div class="field"><label>Username</label><input id="loginUser" autocomplete="username" autocapitalize="none" placeholder="e.g. admin"></div>
+        <div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" placeholder="Password"></div>
+        <div class="row-actions" style="margin-top:16px">
+          <button class="btn gold block" id="pwLogin">Sign in</button>
+        </div>
+        <div class="row-actions">
+          <button class="btn ghost block" id="ssoLogin">Sign in with Microsoft 365</button>
+        </div>
       </div>
-      <div class="row-actions">
-        <button class="btn ghost block" id="ssoLogin">Sign in with Microsoft 365</button>
-      </div>
+      <p id="pwToggleWrap" class="hidden" style="margin-top:14px;font-size:12px"><a href="#" id="pwToggle" style="color:var(--muted)">Administrator / break-glass sign-in</a></p>
       <p style="margin-top:14px;font-size:12px;color:var(--muted)">Sign in with your Golden account.</p>
     </div>
   </div>

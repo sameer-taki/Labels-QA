@@ -163,12 +163,59 @@ async function showLogin(){
   if(u) u.value=""; if(p) p.value="";
   $("#pwLogin").onclick=doLogin;
   $("#ssoLogin").onclick=doSso;
-  // Cloud Microsoft 365 button is shown only when Entra SSO is enabled. With local Active Directory
-  // (or plain local accounts) users sign in with the username/password form above.
-  try{ const cfg=await (await fetch("/api/config")).json(); const on=!!(cfg&&cfg.sso&&cfg.sso.enabled); const b=$("#ssoLogin"); if(b&&b.parentElement) b.parentElement.style.display=on?"":"none"; }catch(e){}
+  let cfg=null; try{ cfg=await (await fetch("/api/config")).json(); }catch(e){}
+  // Microsoft 365 button only when Entra SSO is enabled (legacy on-prem option).
+  const ssoOn=!!(cfg&&cfg.sso&&cfg.sso.enabled); const b=$("#ssoLogin"); if(b&&b.parentElement) b.parentElement.style.display=ssoOn?"":"none";
+  const clerkOn=!!(cfg&&cfg.clerk&&cfg.clerk.enabled&&cfg.clerk.publishableKey);
+  if(clerkOn){
+    // Cloud deploy: Clerk is the primary sign-in. Tuck the password form behind a toggle so a
+    // break-glass Administrator can still sign in locally if Clerk is ever unavailable.
+    $("#pwBox").classList.add("hidden");
+    $("#pwToggleWrap").classList.remove("hidden");
+    $("#pwToggle").onclick=(e)=>{ e.preventDefault(); $("#pwBox").classList.toggle("hidden"); if(u&&!$("#pwBox").classList.contains("hidden")) u.focus(); };
+    initClerk(cfg.clerk.publishableKey);
+  } else {
+    $("#pwBox").classList.remove("hidden");
+    $("#pwToggleWrap").classList.add("hidden");
+  }
   if(u) u.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); if(p) p.focus(); } };
   if(p) p.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); doLogin(); } };
-  if(u) u.focus();
+  if(u && !clerkOn) u.focus();
+}
+/* ---------- Clerk (cloud identity) ---------- */
+let _clerkLoaded=false;
+/* The Clerk Frontend-API host is base64-encoded inside the publishable key (…$-terminated). */
+function clerkFrontendApi(pk){ try{ return atob(String(pk).replace(/^pk_(test|live)_/,"")).replace(/\$+$/,""); }catch(e){ return ""; } }
+function loadClerk(pk){
+  return new Promise((resolve,reject)=>{
+    if(_clerkLoaded && window.Clerk) return resolve(window.Clerk);
+    const fapi=clerkFrontendApi(pk); if(!fapi) return reject(new Error("Invalid Clerk key"));
+    const s=document.createElement("script");
+    s.setAttribute("data-clerk-publishable-key", pk);
+    s.async=true; s.crossOrigin="anonymous";
+    s.src="https://"+fapi+"/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+    s.onload=async()=>{ try{ await window.Clerk.load(); _clerkLoaded=true; resolve(window.Clerk); }catch(e){ reject(e); } };
+    s.onerror=()=>reject(new Error("Could not load Clerk sign-in (offline?)"));
+    document.head.appendChild(s);
+  });
+}
+async function initClerk(pk){
+  const loadEl=$("#clerkLoading"); if(loadEl) loadEl.classList.remove("hidden");
+  let clerk; try{ clerk=await loadClerk(pk); }
+  catch(e){ if(loadEl) loadEl.classList.add("hidden"); toast(e.message||"Sign-in unavailable"); $("#pwBox").classList.remove("hidden"); return; }
+  if(loadEl) loadEl.classList.add("hidden");
+  let exchanging=false;
+  const finish=async()=>{
+    if(exchanging||TOKEN||!clerk.session) return; exchanging=true;
+    try{
+      const token=await clerk.session.getToken();
+      const r=await api("/api/login",{method:"POST",body:{mode:"clerk",token}});
+      TOKEN=r.token; localStorage.setItem("gqa_token",TOKEN); ME=r.user; MD=await api("/api/masterdata"); showApp();
+    }catch(e){ exchanging=false; toast(e.message||"Sign-in failed"); }
+  };
+  if(clerk.user){ finish(); return; } // already signed in (e.g. returning after a Clerk redirect)
+  const el=$("#clerk-signin"); try{ if(el && clerk.mountSignIn) clerk.mountSignIn(el); }catch(e){}
+  clerk.addListener((res)=>{ if(res && res.user) finish(); }); // no-reload sign-in
 }
 async function doLogin(){
   const username=$("#loginUser").value.trim(), password=$("#loginPass").value;
@@ -196,7 +243,7 @@ async function doSso(){
   catch(e){ toast(e.message||"SSO not recognised"); }
 }
 function ensureMsal(){ return new Promise((resolve,reject)=>{ if(window.msal)return resolve(); const s=document.createElement("script"); s.src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"; s.onload=()=>resolve(); s.onerror=()=>reject(new Error("Could not load Microsoft sign-in (offline?)")); document.head.appendChild(s); }); }
-function logout(){ TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; showLogin(); }
+function logout(){ TOKEN=null; localStorage.removeItem("gqa_token"); ME=null; try{ if(window.Clerk && window.Clerk.signOut) window.Clerk.signOut(); }catch(e){} showLogin(); }
 function showApp(){
   $("#login").classList.add("hidden"); $("#appwrap").classList.remove("hidden");
   $("#whoName").textContent=ME.name; $("#whoRole").textContent=ME.role;

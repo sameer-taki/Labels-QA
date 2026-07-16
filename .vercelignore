@@ -1,0 +1,12 @@
+# On-prem / container deployment artifacts — not needed by the Vercel build.
+deploy/
+docs/
+test/
+data/
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.traefik.yml
+entrypoint.sh
+CONTAINER-DEPLOY.md
+DEPLOYMENT.md
