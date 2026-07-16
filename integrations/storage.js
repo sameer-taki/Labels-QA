@@ -58,7 +58,13 @@ function makePostgres(url) {
   // pooler (port 5432): session pooling keeps a client pinned to one backend for its lifetime,
   // which is what pg_advisory_lock (below) needs to serialise writes across all invocations.
   const max = Number(process.env.PG_POOL_MAX) || 8;
-  const ssl = /sslmode=disable/.test(url) ? false : { rejectUnauthorized: false };
+  // SSL off by default (on-prem / docker-compose Postgres speaks plaintext on the LAN, and
+  // forcing TLS there breaks the connection). Enable it only for managed cloud databases that
+  // require it — Supabase, or any URL asking for sslmode=require/verify, or an explicit PGSSL.
+  const bool = v => /^(1|true|yes|on)$/i.test(String(v || ''));
+  const needSsl = !/sslmode=disable/.test(url) &&
+    (/supabase\.(co|com)/.test(url) || /sslmode=(require|verify)/.test(url) || bool(process.env.PGSSL));
+  const ssl = needSsl ? { rejectUnauthorized: false } : false;
   const pool = new Pool({ connectionString: url, max, application_name: 'golden-qa', ssl,
     idleTimeoutMillis: 10000, connectionTimeoutMillis: 15000 });
   pool.on('error', (e) => console.error('PG pool error:', e && e.message));
