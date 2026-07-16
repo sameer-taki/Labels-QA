@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "{config.json,public/**,integrations/**}",
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/metrics", "destination": "/api/index" },
+    { "source": "/uploads/(.*)", "destination": "/api/index" },
+    { "source": "/((?!.*\\.[a-zA-Z0-9]+$).*)", "destination": "/api/index" }
+  ],
+  "crons": [
+    { "path": "/api/cron", "schedule": "0 * * * *" }
+  ]
+}

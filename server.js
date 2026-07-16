@@ -12,11 +12,16 @@ const DATA_DIR = process.env.GQA_DATA_DIR ? path.resolve(ROOT, process.env.GQA_D
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const UP_DIR = path.join(DATA_DIR, 'uploads');
 const PUB = path.join(ROOT, 'public');
-fs.mkdirSync(UP_DIR, { recursive: true });
+// Best-effort: on a serverless host (Vercel) the bundle filesystem is read-only, so this dir
+// can't be created — that's fine because uploads then go to Supabase Storage and persistence
+// to PostgreSQL, never to local disk. Only the local/dev JSON deploy actually writes here.
+try { fs.mkdirSync(UP_DIR, { recursive: true }); } catch (e) { /* read-only FS (serverless) */ }
 
 const NOTIFY = require('./integrations/notify');
 const EMAIL = require('./integrations/email');
 const ENTRA = require('./integrations/entraId');
+const CLERK = require('./integrations/clerkAuth');
+const SS = require('./integrations/supabaseStorage');
 const BACKUP = require('./integrations/backup');
 const WEBHOOKS = require('./integrations/webhooks');
 const LDAP = require('./integrations/ldap');
@@ -84,7 +89,16 @@ async function loadDB() {
   // backfill master-data added after this DB was created (product types, machine station schemas)
   const mdChanged = migrateMasterdata();
   (DB.users || []).forEach(u => { if (!Array.isArray(u.qualifiedStages)) u.qualifiedStages = []; });
-  if (mdChanged) { try { await STORAGE.save(DB); } catch(e) {} }
+  // Bootstrap: attach ADMIN_EMAIL to the seed admin if it has no e-mail yet, so Clerk sign-in can
+  // match it. Never overwrites an e-mail an admin has already set, and skips if another user owns it.
+  let adminBackfilled = false;
+  const bootEmail = (process.env.ADMIN_EMAIL || '').toLowerCase().trim();
+  if (bootEmail) {
+    const adminId = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
+    const admin = (DB.users || []).find(u => u.id === adminId) || (DB.users || []).find(u => u.role === 'Administrator');
+    if (admin && !admin.email && !(DB.users || []).some(u => u.email === bootEmail)) { admin.email = bootEmail; adminBackfilled = true; }
+  }
+  if (mdChanged || adminBackfilled) { try { await STORAGE.save(DB); } catch(e) {} }
 }
 let _saveChain = Promise.resolve();
 /* Serialise all writes through one chain. The returned promise reflects THIS write's real
@@ -146,10 +160,15 @@ function migrateMasterdata(){
 function seedDB() {
   const adminUser = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
   const adminPass = process.env.ADMIN_PASSWORD || '';
-  if (PROD && !adminPass) { console.error('FATAL: set ADMIN_PASSWORD to seed the initial admin user in production.'); process.exit(1); }
+  // ADMIN_EMAIL bootstraps Clerk sign-in: the seed admin is matched to a Clerk account by this
+  // e-mail on first login, so the very first person can sign in via Clerk and then manage users.
+  const adminEmail = (process.env.ADMIN_EMAIL || '').toLowerCase();
+  // Throw (don't process.exit) so a serverless invocation surfaces a clean 500 instead of tearing
+  // down the whole instance mid-request.
+  if (PROD && !adminPass) throw new Error('Set ADMIN_PASSWORD to seed the initial admin user in production.');
   // Production (ADMIN_PASSWORD set): seed a single admin, no demo data. Dev: seed the demo users + jobs.
   const users = adminPass
-    ? [ mkUser(adminUser, 'Administrator', 'Administrator', adminPass) ]
+    ? [ mkUser(adminUser, 'Administrator', 'Administrator', adminPass, [1,2,3,4], adminEmail) ]
     : [ mkUser('akumar', 'A. Kumar', 'QA Officer', 'kumar123', [1,2,3,4]),
         mkUser('pdevi', 'P. Devi', 'QA Officer', 'devi123', [1,2]),
         mkUser('rprasad', 'R. Prasad', 'Supervisor', 'prasad123', [1,2,3,4]),
@@ -554,7 +573,16 @@ function validateChecklistComplete(def, sub){
   return miss;
 }
 /* Only accept server-issued upload URLs (photos are added via POST /api/upload). */
-function cleanUploadUrls(arr, max){ return (Array.isArray(arr)?arr:[]).map(String).filter(u=>/^\/uploads\/[\w.\-]+$/.test(u)).slice(0, max||30); }
+/* Only accept server-issued upload URLs: the legacy local /uploads/<file> form, or a Supabase
+   Storage public URL under OUR bucket (so a client still can't smuggle in an arbitrary URL). */
+function cleanUploadUrls(arr, max){
+  const ssPrefix = SS.isEnabled() ? SS.publicUrl('') : null; // …/object/public/<bucket>/
+  return (Array.isArray(arr)?arr:[]).map(String).filter(u=>{
+    if(/^\/uploads\/[\w.\-]+$/.test(u)) return true;
+    if(ssPrefix && u.indexOf(ssPrefix)===0 && /^[\w.\-\/]+$/.test(u.slice(ssPrefix.length))) return true;
+    return false;
+  }).slice(0, max||30);
+}
 function cleanChecklistResponses(arr){ return (Array.isArray(arr)?arr:[]).map(r=>({ itemKey:String((r&&r.itemKey)||''), status:String((r&&r.status)||''), correctiveAction:String((r&&r.correctiveAction)||''), photos:cleanUploadUrls(r&&r.photos, 8) })).filter(r=>r.itemKey); }
 /* Instant e-mail of a completed/verified inspection to managers + supervisors (and the configured
    digest recipients). Non-blocking; also mirrors to Teams. Requires SMTP configured in config.notify.email. */
@@ -693,18 +721,32 @@ function validateComplete(n, d){
 
 function send(res, code, obj, headers) {
   const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
-  res.writeHead(code, Object.assign({ 'Content-Type': typeof obj==='string'?'text/plain':'application/json', 'Cache-Control':'no-store' }, headers||{}));
-  res.end(body);
+  const hdrs = Object.assign({ 'Content-Type': typeof obj==='string'?'text/plain':'application/json', 'Cache-Control':'no-store' }, headers||{});
+  // Defer the write. handleRequest() flushes any pending DB save BEFORE emitting the response,
+  // so a serverless invocation can never return to the client (and freeze) with an unwritten
+  // save still in flight. Terminal handlers use `return send(...)`, so first send wins.
+  if (!res._resp && !res.headersSent) res._resp = { code, body, headers: hdrs };
 }
 const MIME = { '.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.svg':'image/svg+xml','.ico':'image/x-icon' };
 function serveStatic(res, filePath) {
-  fs.readFile(filePath, (err, buf) => {
-    if (err) return send(res, 404, 'Not found');
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
-    res.end(buf);
+  return new Promise((resolve) => {
+    fs.readFile(filePath, (err, buf) => {
+      if (err) { send(res, 404, 'Not found'); return resolve(); }
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
+      res.end(buf); resolve();
+    });
   });
 }
-function readBody(req) { return new Promise((resolve)=>{ let d=''; req.on('data',c=>{ d+=c; if(d.length>25*1024*1024) req.destroy(); }); req.on('end',()=>{ try{ resolve(d?JSON.parse(d):{}); }catch(e){ resolve({}); } }); }); }
+function readBody(req) {
+  // Vercel's Node runtime can pre-buffer/parse the request body; use it if already present,
+  // otherwise read the raw stream (local / long-running server).
+  if (req.body != null) {
+    if (typeof req.body === 'string') { try { return Promise.resolve(req.body ? JSON.parse(req.body) : {}); } catch (e) { return Promise.resolve({}); } }
+    if (Buffer.isBuffer(req.body)) { try { return Promise.resolve(JSON.parse(req.body.toString('utf8') || '{}')); } catch (e) { return Promise.resolve({}); } }
+    if (typeof req.body === 'object') return Promise.resolve(req.body);
+  }
+  return new Promise((resolve)=>{ let d=''; req.on('data',c=>{ d+=c; if(d.length>25*1024*1024) req.destroy(); }); req.on('end',()=>{ try{ resolve(d?JSON.parse(d):{}); }catch(e){ resolve({}); } }); });
+}
 function csvCell(v){ v=(v==null?'':String(v)); if(/^[=+\-@\t\r]/.test(v)) v="'"+v; return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
 /* Block obvious SSRF targets for admin-configured outbound URLs (webhooks/Teams): loopback,
    link-local incl. the 169.254.169.254 cloud-metadata endpoint, and 0.0.0.0. Other private LAN
@@ -738,8 +780,37 @@ async function api(req, res, url) {
   if (seg[0]==='health' && seg[1]==='ready') { const ok = await STORAGE.ready(); return send(res, ok?200:503, { ready:ok, storage:STORAGE.driver }); }
   if (seg[0]==='health') return send(res,200,{ ok:true, org:CFG.orgName, time:new Date().toISOString(), storage:STORAGE.driver });
 
+  // Vercel Cron target (replaces the on-prem hourly setInterval timers). Vercel sends
+  // `Authorization: Bearer $CRON_SECRET` when CRON_SECRET is set; we also accept ?secret= for
+  // manual runs. handleRequest() takes the write lock for this path (it mutates + saves).
+  if (seg[0]==='cron') {
+    const secret = process.env.CRON_SECRET || '';
+    const bearer = (req.headers['authorization']||'').replace(/^Bearer /,'');
+    if (secret && bearer !== secret && url.searchParams.get('secret') !== secret) return send(res,401,{error:'Unauthorized'});
+    const ran = [];
+    try { checkCapaSla(); ran.push('checkCapaSla'); } catch(e){ console.warn('cron checkCapaSla:', e && e.message); }
+    try { maybeSendScheduledReport(); ran.push('maybeSendScheduledReport'); } catch(e){ console.warn('cron maybeSendScheduledReport:', e && e.message); }
+    try { checkChecklistReminders(); ran.push('checkChecklistReminders'); } catch(e){ console.warn('cron checkChecklistReminders:', e && e.message); }
+    return send(res,200,{ ok:true, ran, time:new Date().toISOString() });
+  }
+
   if (seg[0]==='login' && method==='POST') {
     const b = await readBody(req);
+    // Clerk sign-in: the browser authenticates with Clerk and posts us its session token. We
+    // verify it, read the account e-mail, and match it to a local user record — identity comes
+    // from Clerk, the ROLE/competencies stay in this app's Users register (matched by e-mail).
+    if (b.mode==='clerk') {
+      if (!CLERK.isEnabled()) return send(res,403,{error:'Clerk sign-in is not configured'});
+      const r = await CLERK.authenticate(b.token);
+      if (!r.ok) return send(res,401,{error:'Sign-in rejected: '+(r.error||'invalid session')});
+      const email = String(r.email||'').toLowerCase();
+      const u = DB.users.find(x => x.email && String(x.email).toLowerCase()===email);
+      if (!u) { audit(null,'login-denied','', email+' (Clerk: no matching Golden QA user)'); saveDB(); return send(res,403,{error:'Your account ('+email+') is not authorised for Golden QA. Ask an administrator to add your e-mail under Admin → Users.'}); }
+      if (r.name && !u.name) u.name = r.name;
+      u.lastLogin = new Date().toISOString();
+      audit(u,'login','','via Clerk'); saveDB();
+      return send(res,200,{ token:issueToken(u), user:pubUser(u) });
+    }
     if (b.mode==='sso') {
       if(!CFG.sso || !CFG.sso.enabled) return send(res,403,{error:'SSO is disabled'});
       if(b.idToken){ // real Microsoft Entra ID path
@@ -785,7 +856,10 @@ async function api(req, res, url) {
     // Only advertise SSO when it can actually complete: in production the demo e-mail path is
     // off, so SSO is usable only if a real Entra tenant/client is configured.
     const ssoUsable = !!(CFG.sso && CFG.sso.enabled) && (!PROD || !!(CFG.sso.tenantId && CFG.sso.clientId));
-    return send(res,200,{ orgName:CFG.orgName, sso:{ enabled:ssoUsable, clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' } });
+    return send(res,200,{ orgName:CFG.orgName,
+      sso:{ enabled:ssoUsable, clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' },
+      // The publishable key is safe to expose; the browser needs it to load Clerk.js.
+      clerk:{ enabled:CLERK.isEnabled(), publishableKey:CLERK.publishableKey() } });
   }
 
   let user = userByToken(req); let viaApiKey = false;
@@ -897,9 +971,20 @@ async function api(req, res, url) {
   if (seg[0]==='upload' && method==='POST') { // {dataUrl, name}
     const b = await readBody(req); const m=/^data:(image\/\w+);base64,(.+)$/.exec(b.dataUrl||'');
     if(!m) return send(res,400,{error:'Invalid image data'});
-    const ext = m[1]==='image/png'?'.png':'.jpg'; const fn = Date.now()+'-'+crypto.randomBytes(4).toString('hex')+ext;
-    fs.writeFileSync(path.join(UP_DIR,fn), Buffer.from(m[2],'base64')); audit(user,'upload-photo','',fn);
-    return send(res,200,{ url:'/uploads/'+fn });
+    const ext = m[1]==='image/png'?'.png':'.jpg'; const contentType = m[1];
+    const fn = Date.now()+'-'+crypto.randomBytes(4).toString('hex')+ext;
+    const buf = Buffer.from(m[2],'base64');
+    let uploadUrl;
+    if (SS.isEnabled()) { // cloud: store in Supabase Storage, keep the returned public URL
+      const r = await SS.upload(fn, buf, contentType);
+      if(!r.ok) return send(res,502,{error:'Photo upload failed: '+(r.error||'storage error')});
+      uploadUrl = r.url;
+    } else { // local/dev: write to disk under data/uploads and serve from /uploads/
+      try { fs.writeFileSync(path.join(UP_DIR,fn), buf); } catch(e){ return send(res,500,{error:'Cannot store upload: '+(e&&e.message||e)}); }
+      uploadUrl = '/uploads/'+fn;
+    }
+    audit(user,'upload-photo','',fn); saveDB();
+    return send(res,200,{ url:uploadUrl });
   }
 
   if (seg[0]==='masterdata' && method==='GET') return send(res,200, DB.masterdata);
@@ -1491,19 +1576,20 @@ function workbookXls(){
     '</Workbook>';
 }
 
-/* Scheduled manager report (config.reports). Off by default; deduped per day in memory. */
-let _lastReportDate='';
+/* Scheduled manager report (config.reports). Off by default; deduped per day. The last-sent date
+   is PERSISTED in the DB doc (not memory) so it survives the stateless serverless invocations that
+   Vercel Cron fires — otherwise every hourly cron after the send hour would re-send the report. */
 function maybeSendScheduledReport(){
   try{
     const cfg=CFG.reports||{}; const sched=String(cfg.schedule||'off').toLowerCase(); if(sched==='off') return;
-    const now=new Date(); const today=ymd(now); if(_lastReportDate===today) return;
+    const now=new Date(); const today=ymd(now); if(DB.lastReportDate===today) return;
     if(now.getHours() < Number(cfg.hour!=null?cfg.hour:6)) return;
     let due=false;
     if(sched==='daily') due=true;
     else if(sched==='weekly') due=(now.getDay()===Number(cfg.dayOfWeek!=null?cfg.dayOfWeek:1));
     else if(sched==='monthly') due=(now.getDate()===Number(cfg.dayOfMonth!=null?cfg.dayOfMonth:1));
     if(!due) return;
-    _lastReportDate=today;
+    DB.lastReportDate=today;
     const d=buildDigest(); const subject=CFG.orgName+' — Scheduled QA Report '+today;
     EMAIL.send(CFG,{ subject, text:digestText(d), html:digestHtml(d) }).then(r=>{ if(r&&!r.ok&&r.error!=='email disabled') console.log('Scheduled report email:', r.error); }).catch(()=>{});
     try{ NOTIFY.alert(CFG, subject, digestText(d)); }catch(e){}
@@ -1579,46 +1665,93 @@ function digestHtml(d){
     '<h3 style="color:#0e2a47">Top defects (kg)</h3><p>'+(d.topDefects.length?d.topDefects.map(t=>e(t.defect)+' — '+t.kg).join('<br>'):'None')+'</p></div>';
 }
 
-/* ---------- HTTP server ---------- */
-const server = http.createServer((req,res)=>{
-  const url = new URL(req.url, 'http://x');
-  if (url.pathname==='/metrics') { // Prometheus scrape; optional METRICS_TOKEN (Bearer or ?token=)
-    if(!DB) return send(res,503,'not ready\n');
-    const tok=process.env.METRICS_TOKEN;
-    if(tok){ const a=(req.headers['authorization']||'').replace(/^Bearer /,'')||url.searchParams.get('token')||''; if(a!==tok) return send(res,401,'unauthorized\n'); }
-    res.writeHead(200,{ 'Content-Type':'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control':'no-store' }); return res.end(metricsText());
+/* ---------- request handler ---------- */
+/* One handler for both worlds:
+     - Vercel serverless: api/index.js exports this; each invocation is stateless, so we load a
+       FRESH copy of the DB document per request and, for any mutating request, hold a Postgres
+       advisory lock across the whole load→mutate→save cycle. That restores the single-writer
+       guarantee the whole-document store was built on, so concurrent tablets never clobber a
+       write. Crucially, send() only RECORDS the response; we flush the pending save (await
+       _saveChain) BEFORE emitting it, so the function can't freeze with a write still in flight.
+     - Long-running (local / on-prem container): the same handler runs behind http.createServer
+       (see the require.main block below), with the classic setInterval timers restored. */
+async function handleRequest(req, res) {
+  let url; try { url = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end('bad request'); }
+  const method = req.method || 'GET';
+  const needsDb = url.pathname === '/metrics' || url.pathname.startsWith('/api/');
+  // /api/cron is a GET but mutates (CAPA escalation, reminders), so it takes the write lock too.
+  const mutating = needsDb && (url.pathname === '/api/cron' || !['GET','HEAD','OPTIONS'].includes(method));
+  let lock = null;
+  try {
+    if (mutating && STORAGE.acquireLock) lock = await STORAGE.acquireLock();
+    if (needsDb) await loadDB();
+
+    if (url.pathname === '/metrics') { // Prometheus scrape; optional METRICS_TOKEN (Bearer or ?token=)
+      const tok = process.env.METRICS_TOKEN;
+      let authed = true;
+      if (tok) { const a = (req.headers['authorization']||'').replace(/^Bearer /,'') || url.searchParams.get('token') || ''; authed = (a === tok); }
+      if (!authed) { send(res, 401, 'unauthorized\n'); }
+      else { res.writeHead(200, { 'Content-Type':'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control':'no-store' }); res.end(metricsText()); }
+    } else if (url.pathname.startsWith('/api/')) {
+      await api(req, res, url);
+    } else if (url.pathname.startsWith('/uploads/')) {
+      const name = path.basename(url.pathname);
+      // Cloud: uploads live in Supabase Storage, so redirect legacy /uploads/<file> links there.
+      if (SS.isEnabled()) { res.writeHead(302, { 'Location': SS.publicUrl(name), 'Cache-Control':'no-store' }); res.end(); }
+      else { await serveStatic(res, path.join(UP_DIR, name)); }
+    } else {
+      const p = url.pathname === '/' ? '/index.html' : url.pathname;
+      const filePath = path.normalize(path.join(PUB, p));
+      // Boundary-check with a trailing separator so a sibling dir like <PUB>-secret can't be served.
+      if (filePath !== PUB && !filePath.startsWith(PUB + path.sep)) send(res, 403, 'Forbidden');
+      else if (fs.existsSync(filePath)) await serveStatic(res, filePath);
+      else await serveStatic(res, path.join(PUB, 'index.html')); // SPA fallback
+    }
+
+    await _saveChain; // flush any queued save BEFORE the response is written (serverless-safe)
+  } catch (e) {
+    console.error(e);
+    if (!res.headersSent && !res._resp) res._resp = { code:500, body: JSON.stringify({ error: String(e && e.message || e) }), headers:{ 'Content-Type':'application/json', 'Cache-Control':'no-store' } };
+  } finally {
+    if (lock && STORAGE.releaseLock) { try { await STORAGE.releaseLock(lock); } catch (e) {} }
   }
-  if (url.pathname.startsWith('/api/')) return api(req,res,url).catch(e=>{ console.error(e); send(res,500,{error:String(e)}); });
-  if (url.pathname.startsWith('/uploads/')) return serveStatic(res, path.join(UP_DIR, path.basename(url.pathname)));
-  let p = url.pathname === '/' ? '/index.html' : url.pathname;
-  const filePath = path.normalize(path.join(PUB, p));
-  // Boundary-check with a trailing separator so a sibling dir like <PUB>-secret can't be served.
-  if (filePath !== PUB && !filePath.startsWith(PUB + path.sep)) return send(res,403,'Forbidden');
-  fs.existsSync(filePath) ? serveStatic(res, filePath) : serveStatic(res, path.join(PUB,'index.html'));
-});
+  // Emit the deferred response (unless a handler already streamed one directly).
+  if (res._resp && !res.headersSent && !res.writableEnded) {
+    res.writeHead(res._resp.code, res._resp.headers || {});
+    res.end(res._resp.body);
+  }
+}
+
+module.exports = handleRequest;
+module.exports.handleRequest = handleRequest;
+
 const PORT = process.env.PORT || CFG.port;
 const HOST = process.env.HOST || CFG.host;
 
-let _shuttingDown = false;
-function shutdown(sig){ if(_shuttingDown) return; _shuttingDown=true; console.log('Shutting down ('+sig+')…'); server.close(async ()=>{ try{ await _saveChain; }catch(e){} try{ await Promise.resolve(STORAGE.close && STORAGE.close()); }catch(e){} process.exit(0); }); setTimeout(()=>process.exit(0), 8000).unref(); }
-process.on('SIGTERM', ()=>shutdown('SIGTERM'));
-process.on('SIGINT', ()=>shutdown('SIGINT'));
+/* ---------- long-running server (local dev / on-prem container) ----------
+   Skipped on Vercel, where api/index.js require()s this module and the platform owns the
+   process lifecycle + scheduling (Vercel Cron drives the jobs the timers below would). */
+if (require.main === module) {
+  const server = http.createServer(handleRequest);
+  let _shuttingDown = false;
+  function shutdown(sig){ if(_shuttingDown) return; _shuttingDown=true; console.log('Shutting down ('+sig+')…'); server.close(async ()=>{ try{ await _saveChain; }catch(e){} try{ await Promise.resolve(STORAGE.close && STORAGE.close()); }catch(e){} process.exit(0); }); setTimeout(()=>process.exit(0), 8000).unref(); }
+  process.on('SIGTERM', ()=>shutdown('SIGTERM'));
+  process.on('SIGINT', ()=>shutdown('SIGINT'));
 
-(async ()=>{
-  // Production must run on the provisioned PostgreSQL database (DATABASE_URL), never a local
-  // JSON file that would live on ephemeral container storage and vanish on redeploy.
-  if (PROD && !process.env.DATABASE_URL) { console.error('FATAL: production requires DATABASE_URL (PostgreSQL). Refusing to start on the local JSON file.'); process.exit(1); }
-  if (PROD && CFG.sso && CFG.sso.enabled && !(CFG.sso.tenantId && CFG.sso.clientId)) {
-    console.warn('WARNING: SSO is enabled but Entra tenantId/clientId are not configured. Microsoft 365 sign-in is DISABLED in production (the password-less demo path never runs in prod). Set sso.tenantId/clientId to enable it.');
-  }
-  try { await loadDB(); }
-  catch(e){ console.error('FATAL: database init failed —', e && e.message); process.exit(1); }
-  if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: process.env.BACKUP_DIR || path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
-  const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
-  const repTimer = setInterval(maybeSendScheduledReport, 60*60000); if (repTimer.unref) repTimer.unref(); maybeSendScheduledReport();
-  const chkTimer = setInterval(checkChecklistReminders, 60*60000); if (chkTimer.unref) chkTimer.unref(); checkChecklistReminders();
-  const authMode = LDAP.isEnabled(CFG) ? 'Active Directory (LDAPS) + local' : 'local passwords'+((CFG.sso&&CFG.sso.enabled)?' + Entra SSO':'');
-  server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+'] [auth: '+authMode+']'));
-})();
-
-module.exports = { server };
+  (async ()=>{
+    // Production must run on a real database (DATABASE_URL), never a local JSON file that would
+    // live on ephemeral container storage and vanish on redeploy.
+    if (PROD && !process.env.DATABASE_URL) { console.error('FATAL: production requires DATABASE_URL (PostgreSQL). Refusing to start on the local JSON file.'); process.exit(1); }
+    if (PROD && CFG.sso && CFG.sso.enabled && !(CFG.sso.tenantId && CFG.sso.clientId)) {
+      console.warn('WARNING: SSO is enabled but Entra tenantId/clientId are not configured.');
+    }
+    try { await loadDB(); }
+    catch(e){ console.error('FATAL: database init failed —', e && e.message); process.exit(1); }
+    if (STORAGE.driver === 'json') BACKUP.scheduleBackups({ dbFile: DB_FILE, backupDir: process.env.BACKUP_DIR || path.join(DATA_DIR,'backups'), intervalMin:(CFG.backup&&CFG.backup.intervalMin)||180, keep:(CFG.backup&&CFG.backup.keep)||48 });
+    const slaTimer = setInterval(checkCapaSla, 60*60000); if (slaTimer.unref) slaTimer.unref(); checkCapaSla();
+    const repTimer = setInterval(maybeSendScheduledReport, 60*60000); if (repTimer.unref) repTimer.unref(); maybeSendScheduledReport();
+    const chkTimer = setInterval(checkChecklistReminders, 60*60000); if (chkTimer.unref) chkTimer.unref(); checkChecklistReminders();
+    const authMode = CLERK.isEnabled() ? 'Clerk + local' : (LDAP.isEnabled(CFG) ? 'Active Directory (LDAPS) + local' : 'local passwords'+((CFG.sso&&CFG.sso.enabled)?' + Entra SSO':''));
+    server.listen(PORT, HOST, ()=> console.log('Golden QA server on http://'+HOST+':'+PORT+'  ('+CFG.orgName+')  [storage: '+STORAGE.driver+'] [auth: '+authMode+']'));
+  })();
+}
