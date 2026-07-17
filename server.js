@@ -1678,7 +1678,12 @@ function digestHtml(d){
 async function handleRequest(req, res) {
   let url; try { url = new URL(req.url, 'http://x'); } catch (e) { res.writeHead(400); return res.end('bad request'); }
   const method = req.method || 'GET';
-  const needsDb = url.pathname === '/metrics' || url.pathname.startsWith('/api/');
+  // /api/config and /api/health must NOT depend on the database — they are exactly what you hit
+  // to diagnose a bad DATABASE_URL, and /api/config also drives the sign-in screen (so the Clerk
+  // card still appears even if the DB is unreachable). Everything else under /api (and /metrics)
+  // loads the document.
+  const noDbApi = url.pathname === '/api/config' || url.pathname === '/api/health' || url.pathname.startsWith('/api/health/');
+  const needsDb = url.pathname === '/metrics' || (url.pathname.startsWith('/api/') && !noDbApi);
   // /api/cron is a GET but mutates (CAPA escalation, reminders), so it takes the write lock too.
   const mutating = needsDb && (url.pathname === '/api/cron' || !['GET','HEAD','OPTIONS'].includes(method));
   let lock = null;
