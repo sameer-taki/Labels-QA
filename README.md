@@ -8,8 +8,10 @@ Runs as a single Node.js process. The standard (containerised) deployment stores
 **PostgreSQL** (provisioned as part of the stack); for local/dev use it falls back to a
 zero-dependency **JSON file** — no separate database needed to try it out.
 
-> **☁️ Cloud deployment (Vercel + Supabase + Clerk):** the same code also runs serverless on
-> Vercel with Supabase Postgres/Storage and Clerk sign-in — see **[CLOUD-DEPLOY.md](CLOUD-DEPLOY.md)**.
+> **☁️ Cloud deployment (Vercel + Supabase):** the same code also runs serverless on Vercel with
+> Supabase Postgres/Storage — see **[CLOUD-DEPLOY.md](CLOUD-DEPLOY.md)**. Sign-in uses **local
+> accounts** (username + password); Clerk sign-in is built in but disabled by default
+> (`CLERK_ENABLED=true` to re-enable).
 
 ---
 

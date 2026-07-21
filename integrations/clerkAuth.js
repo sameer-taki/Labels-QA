@@ -26,7 +26,14 @@ function b64urlToJson(s){ return JSON.parse(b64urlToBuf(s).toString('utf8')); }
 
 function secretKey(){ return process.env.CLERK_SECRET_KEY || ''; }
 function publishableKey(){ return process.env.CLERK_PUBLISHABLE_KEY || ''; }
-function isEnabled(){ return !!(secretKey() && frontendApi()); }
+
+/* App-level kill switch. Clerk sign-in is OFF unless CLERK_ENABLED is explicitly turned on, so the
+   app runs on local accounts (username/password) + optional Active Directory even when the Clerk
+   keys are still present in the environment (e.g. left set on Vercel). To turn Clerk back on later,
+   set CLERK_ENABLED=true (or 1/yes/on) — it then also needs CLERK_SECRET_KEY + a publishable key
+   just as before. Defaulting off means "revert to local accounts" is the shipped behaviour. */
+function clerkTurnedOn(){ const v = String(process.env.CLERK_ENABLED || '').trim().toLowerCase(); return v==='1' || v==='true' || v==='yes' || v==='on'; }
+function isEnabled(){ return clerkTurnedOn() && !!(secretKey() && frontendApi()); }
 
 /* The Frontend API host is base64-encoded inside the publishable key (…$-terminated),
    e.g. pk_test_Y2xlcmsuZXhhbXBsZS5jb20k -> "clerk.example.com". Allow an explicit override. */
