@@ -5,6 +5,11 @@ This is the **cloud** deployment of Golden QA: the same application code that ru
 Storage** and **Clerk** sign-in. The on-prem/container path (Docker, LDAP, local disk) still works
 unchanged — see [DEPLOYMENT.md](DEPLOYMENT.md) / [CONTAINER-DEPLOY.md](CONTAINER-DEPLOY.md).
 
+> **⚠️ Clerk is currently disabled.** The app signs in with **local accounts** (username +
+> password) — plus Active Directory if you configure it. Clerk stays off even when the
+> `CLERK_*` keys are present; to turn it back on later set **`CLERK_ENABLED=true`**. The rest of
+> this document describes the full Clerk setup for when you re-enable it.
+
 ```
  Tablet / browser ──HTTPS──▶ Vercel (static PWA + /api/* serverless function)
                                    │
@@ -20,7 +25,7 @@ unchanged — see [DEPLOYMENT.md](DEPLOYMENT.md) / [CONTAINER-DEPLOY.md](CONTAIN
 | Concern | On-prem | Cloud |
 |---|---|---|
 | Process | long-running `node server.js` | `server.js` handler exported through `api/index.js`; `vercel.json` rewrites all routes to it |
-| Auth | local scrypt + AD/LDAP + Entra | **Clerk** — the browser signs in with Clerk, posts its session token to `POST /api/login {mode:"clerk"}`; the server verifies it and matches the e-mail to a user record. **Roles stay in-app** (Admin → Users). The local password login remains as a break-glass admin. |
+| Auth | local scrypt + AD/LDAP + Entra | **Local accounts** (username + password, scrypt) — same as on-prem; AD/LDAP still optional. *Clerk is available but off by default:* set `CLERK_ENABLED=true` to have the browser sign in with Clerk, post its session token to `POST /api/login {mode:"clerk"}`, and match the e-mail to a user record. **Roles always stay in-app** (Admin → Users). |
 | Database | Postgres or JSON file | **Supabase Postgres**, same single-`jsonb`-document model (`app_state`) |
 | Write safety | one process = one writer | serverless has many workers, so each mutating request holds a **Postgres advisory lock** and reloads the document fresh — no lost updates |
 | Uploads | local disk `data/uploads` | **Supabase Storage** (`qa-uploads`, public-read); the endpoint returns the public URL |
@@ -68,13 +73,14 @@ You provide two values from the Supabase dashboard:
 | `SUPABASE_URL` | `https://gtcdopsaxvywakdbtrvv.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role secret |
 | `SUPABASE_STORAGE_BUCKET` | `qa-uploads` |
-| `CLERK_PUBLISHABLE_KEY` | `pk_…` |
-| `CLERK_SECRET_KEY` | `sk_…` |
-| `CLERK_ALLOWED_DOMAIN` | `golden.com.fj` *(optional e-mail allow-list)* |
+| `CLERK_ENABLED` | *omit / `false`* — Clerk is **off**; set `true` only to re-enable Clerk sign-in |
+| `CLERK_PUBLISHABLE_KEY` | `pk_…` *(only needed when `CLERK_ENABLED=true`)* |
+| `CLERK_SECRET_KEY` | `sk_…` *(only needed when `CLERK_ENABLED=true`)* |
+| `CLERK_ALLOWED_DOMAIN` | `golden.com.fj` *(optional e-mail allow-list, Clerk only)* |
 | `SECRET_KEY` | 48-byte random (signs session tokens + the audit chain) |
-| `ADMIN_USERNAME` | `admin` |
-| `ADMIN_PASSWORD` | strong password (break-glass local login) |
-| `ADMIN_EMAIL` | the Clerk e-mail that should become the first Administrator |
+| `ADMIN_USERNAME` | `admin` (the local sign-in username) |
+| `ADMIN_PASSWORD` | strong password (**the** local admin login) |
+| `ADMIN_EMAIL` | optional; the e-mail matched to the seed admin if Clerk is re-enabled |
 | `CRON_SECRET` | 48-byte random (authenticates Vercel Cron → `/api/cron`) |
 
 Generate secrets with: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
@@ -92,11 +98,15 @@ builds automatically.
 
 ## 5. First sign-in
 
-1. Open the Vercel URL → the Clerk sign-in card appears.
-2. Sign in with the account whose e-mail equals `ADMIN_EMAIL` → you land as Administrator.
-3. Add the rest of your team under **Admin → Users** (e-mail + role + stage competencies).
-4. Break-glass: click **Administrator / break-glass sign-in** to use `ADMIN_USERNAME` /
-   `ADMIN_PASSWORD` if Clerk is ever unavailable.
+With Clerk off (the default), the sign-in screen shows the **local username + password** form:
+
+1. Open the Vercel URL → sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+2. Add the rest of your team under **Admin → Users** (username + password + role + stage
+   competencies). Existing accounts already in the database stay exactly as they were.
+
+*If you re-enable Clerk (`CLERK_ENABLED=true`):* the Clerk sign-in card appears instead; sign in
+with the account whose e-mail equals `ADMIN_EMAIL`, and the local username/password form stays
+available as a break-glass admin behind the **Administrator sign-in** link.
 
 ## Known limits of the lift-and-adapt
 

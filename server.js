@@ -858,8 +858,9 @@ async function api(req, res, url) {
     const ssoUsable = !!(CFG.sso && CFG.sso.enabled) && (!PROD || !!(CFG.sso.tenantId && CFG.sso.clientId));
     return send(res,200,{ orgName:CFG.orgName,
       sso:{ enabled:ssoUsable, clientId:(CFG.sso&&CFG.sso.clientId)||'', tenantId:(CFG.sso&&CFG.sso.tenantId)||'' },
-      // The publishable key is safe to expose; the browser needs it to load Clerk.js.
-      clerk:{ enabled:CLERK.isEnabled(), publishableKey:CLERK.publishableKey() } });
+      // The publishable key is safe to expose; the browser needs it to load Clerk.js. Only advertise
+      // it when Clerk is actually enabled, so with Clerk off the sign-in screen shows the local form.
+      clerk:{ enabled:CLERK.isEnabled(), publishableKey:CLERK.isEnabled()?CLERK.publishableKey():'' } });
   }
 
   let user = userByToken(req); let viaApiKey = false;
