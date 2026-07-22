@@ -53,7 +53,7 @@ You provide two values from the Supabase dashboard:
 - **`SUPABASE_SERVICE_ROLE_KEY`** — Project → Settings → API → **service_role** secret (used
   server-side to upload to Storage; never shipped to the browser).
 
-`SUPABASE_URL` is `https://gtcdopsaxvywakdbtrvv.supabase.co`.
+`SUPABASE_URL` is `https://lrctnozzqxoiqacdjvhy.supabase.co` (the **Labels-QA** Supabase project).
 
 ## 2. Clerk
 
@@ -70,7 +70,7 @@ You provide two values from the Supabase dashboard:
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | Supabase **session pooler** URI (port 5432), password filled in |
-| `SUPABASE_URL` | `https://gtcdopsaxvywakdbtrvv.supabase.co` |
+| `SUPABASE_URL` | `https://lrctnozzqxoiqacdjvhy.supabase.co` *(the Labels-QA project)* |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role secret |
 | `SUPABASE_STORAGE_BUCKET` | `qa-uploads` |
 | `CLERK_ENABLED` | *omit / `false`* — Clerk is **off**; set `true` only to re-enable Clerk sign-in |
